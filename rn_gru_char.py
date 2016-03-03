@@ -9,11 +9,11 @@ import theano.tensor as T
 class HyperParams:
     """Hyperparameters for GRU setup."""
 
-    def __init__(self, state_size=128, layers=1, bptt_truncate=-1, seq_length=100):
+    def __init__(self, state_size=128, layers=1, seq_len=100, bptt_truncate=-1):
         self.state_size = state_size
         self.layers = layers
+        self.seq_len = seq_len
         self.bptt_truncate = bptt_truncate
-        self.seq_length = seq_length
 
 
 class ModelParams:
@@ -52,7 +52,7 @@ class ModelParams:
     def savetofile(self, outfile):
         try:
             np.savez(outfile, U=self.U, V=self.V, W=self.W, b=self.b, c=self.c)
-        except OSError, e:
+        except OSError as e:
             raise e
         else:
             if isinstance(outfile, str):
@@ -87,66 +87,25 @@ class CharSet:
 
         stderr.write("Initialized character set, size: {0:d}\n".format(self.vocab_size))
 
-    @staticmethod
-    def loadfromfile(filename):
-        """Loads charset from filename."""
-
-        try:
-            f = open(filename, 'rb')
-        except OSError, e:
-            stderr.write("Couldn't open charset file, error: {0:s}\n".format(e))
-        else:
-            try:
-                modelstate = pickle.load(f)
-            except Exception, e:
-                stderr.write("Couldn't load charset, error: {0:s}\n".format(e))
-                return None
-            else:
-                return modelstate
-        finally:
-            f.close()
-
-    def idx_of_char(self, char):
+    def idxofchar(self, char):
         '''Returns index of char, or index of unknown replacement if index out of range.'''
         if char in self._char_to_idx:
             return self._char_to_idx[char]
         else:
             return self.unknown_idx
 
-    def char_at_idx(self, idx):
+    def charatidx(self, idx):
         '''Returns character at idx, or unknown replacement if character not in set.'''
         if idx in self._idx_to_char:
             return self._idx_to_char[idx]
         else:
             return self.unknown_char
 
-    def savetofile(self, savedir):
-        """Saves model state to file in savedir.
-        Filename taken from srcinfo if possible, otherwise defaults to 'charset.p'.
-        Returns filename if successful, None otherwise.
-        """
-
-        if isinstance(self.srcinfo, str):
-            filename = os.path.join(savedir, self.srcinfo + ".p")
-        elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
-            filename = os.path.join(savedir, self.srcinfo['name'] + ".p")
-        else:
-            filename = os.path.join(savedir, "charset.p")
-
-        try:
-            f = open(filename, 'wb')
-        except OSError, e:
-            stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
-            return None
-        else:
-            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-            return filename
-        finally:
-            f.close()
-
         
 class DataSet:
     """Preprocessed dataset, split into sequences and stored as arrays of character indexes."""
+
+    # TODO: save/load arrays separately as .npz, and other attributes in dict
 
     def __init__(self, datastr, charset, seq_len=50, srcinfo=None, savedarrays=None):
         self.datastr = datastr
@@ -160,7 +119,7 @@ class DataSet:
             self.x_array = savedarrays['x_array']
             self.y_array = savedarrays['y_array']
 
-            stderr.write("Loaded arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_matrix.shape), repr(self.y_matrix.shape)))
+            stderr.write("Loaded arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
         else:
             stderr.write("Processing data string of {0:d} bytes...\n".format(len(datastr)))
@@ -170,18 +129,18 @@ class DataSet:
             for pos in range(0, len(datastr)-1, seq_len):
                 if pos+seq_len < len(datastr):
                     # Add normally while slices are full sequence length
-                    x_sequences.append([ charset.idx_of_char(ch) for ch in datastr[pos:pos+seq_len] ])
-                    y_sequences.append([ charset.idx_of_char(ch) for ch in datastr[pos+1:pos+seq_len+1] ])
+                    x_sequences.append([ charset.idxofchar(ch) for ch in datastr[pos:pos+seq_len] ])
+                    y_sequences.append([ charset.idxofchar(ch) for ch in datastr[pos+1:pos+seq_len+1] ])
                 else:
                     # Pad otherwise-truncated final sequence with text from beginning
-                    x_sequences.append([ charset.idx_of_char(ch) for ch in (datastr[pos:] + datastr[:pos+seq_len-len(datastr)]) ])
-                    y_sequences.append([ charset.idx_of_char(ch) for ch in (datastr[pos+1:] + datastr[:pos+1+seq_len-len(datastr)]) ])
+                    x_sequences.append([ charset.idxofchar(ch) for ch in (datastr[pos:] + datastr[:pos+seq_len-len(datastr)]) ])
+                    y_sequences.append([ charset.idxofchar(ch) for ch in (datastr[pos+1:] + datastr[:pos+1+seq_len-len(datastr)]) ])
 
             # Encode sequences into arrays for training
             self.x_array = np.asarray(x_sequences, dtype='int32')
             self.y_array = np.asarray(y_sequences, dtype='int32')
 
-            stderr.write("Initialized arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_matrix.shape), repr(self.y_matrix.shape)))
+            stderr.write("Initialized arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
     @staticmethod
     def loadfromfile(filename):
@@ -189,12 +148,12 @@ class DataSet:
 
         try:
             f = open(filename, 'rb')
-        except OSError, e:
+        except OSError as e:
             stderr.write("Couldn't open data set file, error: {0:s}\n".format(e))
         else:
             try:
                 modelstate = pickle.load(f)
-            except Exception, e:
+            except Exception as e:
                 stderr.write("Couldn't load data set, error: {0:s}\n".format(e))
                 return None
             else:
@@ -207,6 +166,8 @@ class DataSet:
         Filename taken from srcinfo if possible, otherwise defaults to 'dataset.p'.
         Returns filename if successful, None otherwise.
         """
+        # Create directory if necessary (won't throw exception if dir already exists)
+        os.makedirs(savedir, exist_ok=True)
 
         if isinstance(self.srcinfo, str):
             filename = os.path.join(savedir, self.srcinfo + ".p")
@@ -217,7 +178,7 @@ class DataSet:
 
         try:
             f = open(filename, 'wb')
-        except OSError, e:
+        except OSError as e:
             stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
             return None
         else:
@@ -239,25 +200,25 @@ class Checkpoint:
         self.loss = loss
 
     @classmethod
-    def create_checkpoint(cls, savedir, datafile, modelparams, epoch, pos, loss):
+    def createcheckpoint(cls, savedir, datafile, modelparams, epoch, pos, loss):
         """Creates and saves modelparams and pickled training checkpoint into savedir.
-        Returns new checkpoint if successful, or None otherwise.
+        Returns new checkpoint and filename if successful, or (None, None) otherwise.
         """
 
         # Create directory if necessary (won't throw exception if dir already exists)
         os.makedirs(savedir, exist_ok=True)
 
         # Determine filenames
-        modeldatetime = datetime.now()
+        modeldatetime = datetime.datetime.now(datetime.timezone.utc)
         basefilename = modeldatetime.strftime("%Y-%m-%d-%H-%M-%S-%Z")
 
         # Save model file
         modelfilename = os.path.join(savedir, basefilename + ".npz")
         try:
             modelfile = open(modelfilename, 'wb')
-        except OSError, e:
+        except OSError as e:
             stderr.write("Couldn't save model parameters to {0:s}!\nError: {1:s}\n".format(modelfilename, e))
-            return None
+            return None, None
         else:
             modelparams.savetofile(modelfile)
             stderr.write("Saved model parameters to {0:s}\n".format(modelfilename))
@@ -269,29 +230,29 @@ class Checkpoint:
             # Save checkpoint
             try:
                 cpfile = open(cpfilename, 'wb')
-            except OSError, e:
+            except OSError as e:
                 stderr.write("Couldn't save checkpoint to {0:s}!\nError: {1:s}\n".format(cpfilename, e))
-                return None
+                return None, None
             else:
                 pickle.dump(cp, cpfile, protocol=pickle.HIGHEST_PROTOCOL)
-                stderr.write("Saved checkpoint to {0:s}".format(cpfilename))
-                return cp
+                stderr.write("Saved checkpoint to {0:s}\n".format(cpfilename))
+                return cp, cpfilename
             finally:
                 cpfile.close()
         finally:
             modelfile.close()
 
     @classmethod
-    def load_checkpoint(cls, cpfile):
+    def loadcheckpoint(cls, cpfile):
         """Loads checkpoint from saved file and returns checkpoint object."""
         try:
             f = open(cpfile, 'rb')
-        except OSError, e:
+        except OSError as e:
             stderr.write("Couldn't open checkpoint file {0:s}!\nError: {1:s}\n".format(cpfile, e))
         else:
             try:
                 cp = pickle.load(f)
-            except Exception, e:
+            except Exception as e:
                 stderr.write("Error restoring checkpoint from file {0:s}:\n{1:s}\n".format(cpfile, e))
                 return None
             else:
@@ -320,15 +281,33 @@ class Checkpoint:
         
 
 class ModelState:
-    """Model state, including hyperparamters, charset, and latest checkpoint.
-    Note: Dataset and model parameter matrices must be explicitly (re)loaded.
+    """Model state, including hyperparamters, charset, and last-loaded 
+    checkpoint, dataset, and model parameters.
+
+    Note: Checkpoint, dataset and model parameters must be explicitly (re)loaded.
     """
 
-    def __init__(self, hyper, chars, cpfile=None, srcinfo=None):
+    def __init__(self, hyper, chars, srcinfo=None, curdir=None, cpfile=None):
         self.hyper = hyper
         self.chars = chars
-        self.cpfile = cpfile
         self.srcinfo = srcinfo
+        self.curdir = curdir
+        self.cpfile = cpfile
+        self.cp = None
+        self.data = None
+        self.model = None
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # References to checkpoint, dataset, and model params 
+        # shouldn't be serialized here, so remove them
+        state['cp'] = None
+        state['data'] = None
+        state['model'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
     @staticmethod
     def loadfromfile(filename):
@@ -336,12 +315,12 @@ class ModelState:
 
         try:
             f = open(filename, 'rb')
-        except OSError, e:
+        except OSError as e:
             stderr.write("Couldn't open model state file, error: {0:s}\n".format(e))
         else:
             try:
                 modelstate = pickle.load(f)
-            except Exception, e:
+            except Exception as e:
                 stderr.write("Couldn't load model state, error: {0:s}\n".format(e))
                 return None
             else:
@@ -349,29 +328,38 @@ class ModelState:
         finally:
             f.close()
 
-    def savetofile(self, savedir):
+    def savetofile(self, savedir=self.curdir):
         """Saves model state to file in savedir.
         Filename taken from srcinfo if possible, otherwise defaults to 'modelstate.p'.
         Returns filename if successful, None otherwise.
         """
 
-        if isinstance(self.srcinfo, str):
-            filename = os.path.join(savedir, self.srcinfo + ".p")
-        elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
-            filename = os.path.join(savedir, self.srcinfo['name'] + ".p")
-        else:
-            filename = os.path.join(savedir, "modelstate.p")
+        if not savedir:
+            raise FileNotFoundError('No directory specified!')
 
+        # Create directory if necessary (won't throw exception if dir already exists)
         try:
-            f = open(filename, 'wb')
-        except OSError, e:
-            stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
-            return None
+            os.makedirs(savedir, exist_ok=True)
+        except OSError as e:
+            raise e
         else:
-            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-            return filename
-        finally:
-            f.close()
+            if isinstance(self.srcinfo, str):
+                filename = os.path.join(savedir, self.srcinfo + ".p")
+            elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
+                filename = os.path.join(savedir, self.srcinfo['name'] + ".p")
+            else:
+                filename = os.path.join(savedir, "modelstate.p")
+
+            try:
+                f = open(filename, 'wb')
+            except OSError as e:
+                stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
+                return None
+            else:
+                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+                return filename
+            finally:
+                f.close()
 
 
         
