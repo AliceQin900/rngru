@@ -150,14 +150,16 @@ class DataSet:
             f = open(filename, 'rb')
         except OSError as e:
             stderr.write("Couldn't open data set file, error: {0:s}\n".format(e))
+            return None
         else:
             try:
-                modelstate = pickle.load(f)
+                dataset = pickle.load(f)
             except Exception as e:
                 stderr.write("Couldn't load data set, error: {0:s}\n".format(e))
                 return None
             else:
-                return modelstate
+                stderr.write("Loaded data set from {0:s}\n".format(filename))
+                return dataset
         finally:
             f.close()
 
@@ -249,6 +251,7 @@ class Checkpoint:
             f = open(cpfile, 'rb')
         except OSError as e:
             stderr.write("Couldn't open checkpoint file {0:s}!\nError: {1:s}\n".format(cpfile, e))
+            return None
         else:
             try:
                 cp = pickle.load(f)
@@ -281,21 +284,25 @@ class Checkpoint:
         
 
 class ModelState:
-    """Model state, including hyperparamters, charset, and last-loaded 
+    """Model state, including hyperparamters, charset, last-loaded 
     checkpoint, dataset, and model parameters.
 
-    Note: Checkpoint, dataset and model parameters must be explicitly (re)loaded.
+    Note: Checkpoint is automatically loaded when restoring from file, 
+    but dataset and model parameters must be explicitly (re)loaded.
     """
 
-    def __init__(self, hyper, chars, srcinfo=None, curdir=None, cpfile=None):
+    def __init__(self, hyper, chars, curdir, srcinfo=None, cpfile=None, 
+        cp=None, datafile=None, data=None, modelfile=None, model=None):
         self.hyper = hyper
         self.chars = chars
         self.srcinfo = srcinfo
         self.curdir = curdir
         self.cpfile = cpfile
-        self.cp = None
-        self.data = None
-        self.model = None
+        self.cp = cp
+        self.datafile = datafile
+        self.data = data
+        self.modelfile = modelfile
+        self.model = model
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -308,6 +315,65 @@ class ModelState:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # Reload checkpoint, if present
+        if self.cpfile:
+            self.cp = Checkpoint.loadcheckpoint(cpfile)
+            if self.cp:
+                stderr.write("Loaded checkpoint from {0:s}\n".format(self.cpfile))
+            else:
+                stderr.write("Couldn't load checkpoint from {0:s}\n".format(self.cpfile))
+                # Checkpoint is invalid, so don't use its file
+                self.cpfile = None
+
+    @classmethod
+    def initfromsrcfile(cls, srcfile, usedir, *, init_checkpoint=True, **kwargs):
+        """Initializes a complete model based on given source textfile and hyperparameters.
+        Creates initial checkpoint after model creation if init_checkpoint is True.
+        Additional keyword arguments are passed to HyperParams.
+        """
+        
+        # First, create directory if req'd
+        try:
+            os.makedirs(usedir, exist_ok=True)
+        except OSError as e:
+            stderr.write("Error creating directory {}: {}".format(srcfile, e))
+            raise e
+        
+        # Next, read source file
+        try:
+            f = open(srcfile, 'r', encoding='utf-8')
+        except OSError as e:
+            stderr.write("Error opening source file {}: {}".format(srcfile, e))
+            raise e
+        else:
+            datastr = f.read()
+        finally:
+            f.close()
+
+        # Determine full path of working dir and base name of source file
+        # Will be using these later on
+        dirname = os.path.abspath(usedir)
+        basename = os.path.basename(srcfile)
+
+        # Now find character set
+        charset = CharSet(set(datastr), srcinfo=(basename + "-chars"))
+
+        # And set hyperparameters (additional keyword args passed through)
+        hyperparams = HyperParams(**kwargs)
+
+        # Create dataset, and save
+        dataset = DataSet(datastr, charset, seq_len=hyperparams.seq_len, srcinfo=(basename + "-data"))
+        datafilename = dataset.savetofile(dirname)
+
+        # Now we can initialize the state
+        modelstate = cls(charset, hyperparams, dirname, srcinfo=(basename + "-state"), 
+            datafile=datafilename, data=dataset)
+
+        # And build the model, with optional checkpoint
+        modelstate.buildmodelparams(init_checkpoint)
+
+        return modelstate
+
 
     @staticmethod
     def loadfromfile(filename):
@@ -324,6 +390,7 @@ class ModelState:
                 stderr.write("Couldn't load model state, error: {0:s}\n".format(e))
                 return None
             else:
+                stderr.write("Loaded model state from {0:s}\n".format(filename))
                 return modelstate
         finally:
             f.close()
@@ -361,5 +428,145 @@ class ModelState:
             finally:
                 f.close()
 
+    def loaddata(self, filename=None):
+        """Attempts to load dataset first from given file, 
+        then from current data file, then from current checkpoint (or file).
+        """
+        if filename:
+            openfile = filename
+        elif self.datafile:
+            openfile = self.datafile
+        elif self.cp:
+            openfile = self.cp.datafile
+        elif self.cpfile:
+            # Try loading from file
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            if self.cp:
+                openfile = self.cp.datafile
+            else:
+                # Still didn't work, clear file listing (it's obviously bad)
+                self.cpfile = None
+                return False
+        else:
+            # No checkpoint and no file means no-go
+            stderr.write("No checkpoint file to load!\n")
+            return False
 
-        
+        # Load data now that filename is established
+        self.data = DataSet.loadfromfile(openfile)
+        if self.data:
+            self.datafile = openfile
+            return True
+        else:
+            return False
+
+    def loadmodel(self, filename=None):
+        """Attempts to load model parameters first from given file, 
+        then from current model file, then from current checkpoint (or file).
+        """
+        if filename:
+            openfile = filename
+        elif self.modelfile:
+            openfile = self.modelfile
+        elif self.cp:
+            openfile = self.cp.modelfile
+        elif self.cpfile:
+            # Try loading from file
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            if self.cp:
+                openfile = self.cp.modelfile
+            else:
+                # Still didn't work, clear file listing (it's obviously bad)
+                self.cpfile = None
+                return False
+        else:
+            # No checkpoint and no file means no-go
+            stderr.write("No checkpoint file to load!\n")
+            return False
+
+        # Load model now that filename is established
+        self.model = ModelParams.loadfromfile(openfile)
+        if self.model:
+            self.modelfile = openfile
+            return True
+        else:
+            return False
+
+    def restorefrom(self, checkpoint=None):
+        """Restores dataset and model params from specified checkpoint.
+        Defaults to stored checkpoint if none provided.
+        """
+
+        if checkpoint:
+            # Checkpoint given, use that
+            cp = checkpoint
+        elif self.cp:
+            # Try stored checkpoint
+            cp = self.cp
+        elif self.cpfile:
+            # Try loading checkpoint from file
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            if self.cp:
+                cp = self.cp
+            else:
+                # Still didn't work, clear file listing (it's obviously bad)
+                self.cpfile = None
+                return False
+        else:
+            # No checkpoint and no file means no-go
+            stderr.write("No checkpoint file to load!\n")
+            return False
+
+        # Load data and model, return True only if both work
+        # Passing checkpoint's data/model filenames, overriding 
+        # those already stored in model state
+        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile):
+            return True
+        else:
+            return False
+
+    def newcheckpoint(self, epoch, pos, loss):
+        """Creates new checkpoint with current datafile and model params."""
+
+        # Make sure we have prereqs
+        if not self.datafile:
+            stderr.write("Can't create checkpoint: no data file specified.\n")
+            return False
+        if not self.model:
+            stderr.write("Can't create checkpoint: no model loaded.\n")
+            return False
+
+        # Try creating checkpoint
+        cp, cpfile = Checkpoint.createcheckpoint(self.datafile, self.model, epoch, pos, loss)
+        if cp:
+            self.cp = cp
+            self.cpfile = cpfile
+            return True
+        else:
+            return False
+
+    def builddataset(self, datastr, srcinfo=None):
+        """Builds new dataset from string and saves to file in working directory."""
+
+        # Build dataset from string
+        self.data = DataSet(datastr, self.chars, self.hyper.seq_len, srcinfo)
+
+        # Save to file in working directory
+        self.datafile = self.data.savetofile(self.curdir)
+
+        # Return true if both operations succeed
+        if self.data and self.datafile:
+            return True
+        else:
+            return False
+
+    def buildmodelparams(self, checkpoint=False):
+        """Builds model parameters from current hyperparameters and charset size.
+        Optionally saves checkpoint immediately after building.
+        """
+
+        self.model = ModelParams(self.hyper.state_size, self.chars.vocab_size, self.hyper.layers)
+
+        if checkpoint:
+            self.newcheckpoint(0, 0, 0)
+
