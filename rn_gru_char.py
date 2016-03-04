@@ -9,62 +9,201 @@ import theano.tensor as T
 class HyperParams:
     """Hyperparameters for GRU setup."""
 
-    def __init__(self, state_size=128, layers=1, seq_len=100, bptt_truncate=-1):
+    def __init__(self, state_size=128, layers=1, seq_len=100, bptt_truncate=-1, learnrate=0.001, decay=0.9):
         self.state_size = state_size
         self.layers = layers
         self.seq_len = seq_len
         self.bptt_truncate = bptt_truncate
+        self.learnrate = learnrate
+        self.decay = decay
 
 
 class ModelParams:
-    """Model parameter matrices for GRU setup."""
+    """Model parameter matrices for GRU setup.
+    E is embedding layer, translating from integer input x to state-sized column vector.
+    U and W are gate matrices, 3 per layer (reset gate, update gate, state gate).
+    V translates back to vocab-sized vector for output.
+    """
 
-    def __init__(self, state_size, vocab_size, layers=1, U=None, V=None, W=None, b=None, c=None):
+    def __init__(self, state_size, vocab_size, layers=1, bptt_truncate=-1, 
+        E=None, U=None, W=None, V=None, b=None, c=None):
         self.state_size = state_size
         self.vocab_size = vocab_size
         self.layers = layers
+        self.bptt_truncate = bptt_truncate
 
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        self.U = U if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (layers*3, state_size, vocab_size))
+        self.E = E if isinstance(E, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size))
 
-        self.V = V if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
+        self.U = U if isinstance(U, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
 
         self.W = W if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
+
+        self.V = V if isinstance(V, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
         self.b = b if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
         self.c = c if isinstance(c, np.ndarray) else np.zeros(vocab_size)
 
+        # Build Theano graph and add related attributes
+        self.__build_t__()
+
+    def __build_t__(self):
+        """Build Theano graph and define functions."""
+        self.theano = {}
+
+        # Shared variables
+        self.tE = theano.shared(name='E', value=self.E.astype(theano.config.floatX))
+        self.tU = theano.shared(name='U', value=self.U.astype(theano.config.floatX))
+        self.tW = theano.shared(name='W', value=self.W.astype(theano.config.floatX))
+        self.tV = theano.shared(name='V', value=self.V.astype(theano.config.floatX))
+        self.tb = theano.shared(name='b', value=self.b.astype(theano.config.floatX))
+        self.tc = theano.shared(name='c', value=self.c.astype(theano.config.floatX))
+
+        # rmsprop parameters
+        self.mE = theano.shared(name='mE', value=np.zeros(self.E.shape).astype(theano.config.floatX))
+        self.mU = theano.shared(name='mU', value=np.zeros(self.U.shape).astype(theano.config.floatX))
+        self.mW = theano.shared(name='mW', value=np.zeros(self.W.shape).astype(theano.config.floatX))
+        self.mV = theano.shared(name='mV', value=np.zeros(self.V.shape).astype(theano.config.floatX))
+        self.mb = theano.shared(name='mb', value=np.zeros(self.b.shape).astype(theano.config.floatX))
+        self.mc = theano.shared(name='mc', value=np.zeros(self.c.shape).astype(theano.config.floatX))
+
+        # Inputs
+        x = T.ivector('x')
+        y = T.ivector('y')
+
+        # Constants(ish)
+        layers = self.layers
+
+        # Local bindings for convenience
+        E, U, W, V, b, c = self.tE, self.tU, self.tW, self.tV, self.tb, self.tc
+
+        # Forward propagation
+        def forward_step(x_t, s_t):
+            """Input vector x(t) and state matrix s(t)."""
+
+            # Input to first layer (taking shortcut by getting column of E)
+            # ((Equivalent to multiplying E by x_t as one-hot vector))
+            inout = E[:,x_t]
+
+            # Loop over layers
+            for layer in range(layers):
+                # 3 matrices per layer
+                L = layer * 3
+                # Get previous state for this layer
+                s_prev = s_t[layer]
+                # Update gate
+                z = T.nnet.hard_sigmoid(U[L].dot(inout) + W[L].dot(s_prev) + b[L])
+                # Reset gate
+                r = T.nnet.hard_sigmoid(U[L+1].dot(inout) + W[L+1].dot(s_prev) + b[L+1])
+                # Candidate state
+                h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(s_prev * r) + b[L+2])
+                # New state
+                s = (T.ones_like(z) - z) * h + z * s_prev
+                s_t = T.set_subtensor(s_t[layer], s)
+                # Update for next layer or final output (might add dropout here later)
+                inout = s
+
+            # Final output
+            # Theano softmax returns one-row matrix, return just row
+            # (Will have to be changed once batching implemented)
+            o_t = T.nnet.softmax(V.dot(inout) + c)[0]
+            return [o_t, s_t]
+
+        # Now get Theano to do the heavy lifting
+        [o, s], updates = theano.scan(
+            forward_step, sequences=x, truncate_gradient=self.bptt_truncate,
+            outputs_info=[None, dict(initial=T.zeros([self.layers, self.state_size]))])
+        predict = T.argmax(o, axis=1)
+        o_err = T.sum(T.nnet.categorical_crossentropy(o, y))
+        # Should regularize at some point
+        cost = o_err
+
+        # Gradients
+        dE = T.grad(cost, E)
+        dU = T.grad(cost, U)
+        dW = T.grad(cost, W)
+        db = T.grad(cost, b)
+        dV = T.grad(cost, V)
+        dc = T.grad(cost, c)
+
+        # rmsprop parameters and updates
+        learnrate = T.scalar('learnrate')
+        decayrate = T.scalar('decayrate')
+        mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
+        mU = decayrate * self.mU + (1 - decayrate) * dU ** 2
+        mW = decayrate * self.mW + (1 - decayrate) * dW ** 2
+        mb = decayrate * self.mb + (1 - decayrate) * db ** 2
+        mV = decayrate * self.mV + (1 - decayrate) * dV ** 2
+        mc = decayrate * self.mc + (1 - decayrate) * dc ** 2
+
+        # Assign Theano-constructed functions to instance
+        # Predicted char probabilities
+        self.predict_prob = theano.function([x], o)
+        # Predicted next char
+        self.predict_next = theano.function([x], predict)
+        # Error
+        self.err = theano.function([x, y], cost)
+        # Backpropagation
+        self.bptt = theano.function([x, y], [dE, dU, dW, db, dV, dc])
+        # Training step function
+        self.train_step = theano.function(
+            [x, y, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
+            [],
+            updates=[
+                (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
+                (U, U - learnrate * dU / T.sqrt(mU + 1e-6)),
+                (W, W - learnrate * dW / T.sqrt(mW + 1e-6)),
+                (b, b - learnrate * db / T.sqrt(mb + 1e-6)),
+                (V, V - learnrate * dV / T.sqrt(mV + 1e-6)),
+                (c, c - learnrate * dc / T.sqrt(mc + 1e-6)),
+                (self.mE, mE),
+                (self.mU, mU),
+                (self.mW, mW),
+                (self.mb, mb),
+                (self.mV, mV),
+                (self.mc, mc)])
+        # Whew, I think we're done!
+        # (Loss functions further down)
+
     @classmethod
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
-            U, V, W, b, c = f['U'], f['V'], f['W'], f['b'], f['c']
+            p, E, U, W, V, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['b'], f['c']
 
-            # Infer state, vocab, and layer size
-            layers, state_size, vocab_size = U.shape[0] / 3, U.shape[1], U.shape[2]
+            # Extract hyperparams
+            state_size, vocab_size, layers, bptt_truncate = p[0], p[1], p[2], p[3]
 
             # Create instance
-            model = cls(state_size, vocab_size, layers, U, V, W, b, c)
+            model = cls(state_size, vocab_size, layers, bptt_truncate, E=E, U=U, W=W, V=V, b=b, c=c)
             if isinstance(infile, str):
                 stderr.write("Loaded model parameters from {0}\n".format(infile))
 
             return model
 
     def savetofile(self, outfile):
+        p = np.array([self.state_size, self.vocab_size, self.layers, self.bptt_truncate])
         try:
-            np.savez(outfile, U=self.U, V=self.V, W=self.W, b=self.b, c=self.c)
+            np.savez(outfile, p=p, E=self.E, U=self.U, W=self.W, V=self.V, b=self.b, c=self.c)
         except OSError as e:
             raise e
         else:
             if isinstance(outfile, str):
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
+
+    def calc_total_loss(self, X, Y):
+        return np.sum([self.err(x, y) for x, y in zip(X, Y)])
+
+    def calc_loss(self, X, Y):
+        return self.calc_total_loss(X, Y) / float(Y.size)
 
 
 class CharSet:
@@ -447,7 +586,7 @@ class ModelState:
                 return None
             else:
                 pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-                stderr.write("Saved model state to {0}".format(filename))
+                stderr.write("Saved model state to {0}\n".format(filename))
                 return filename
             finally:
                 f.close()
@@ -589,7 +728,8 @@ class ModelState:
         Optionally saves checkpoint immediately after building if path specified.
         """
 
-        self.model = ModelParams(self.hyper.state_size, self.chars.vocab_size, self.hyper.layers)
+        self.model = ModelParams(self.hyper.state_size, self.chars.vocab_size, 
+            self.hyper.layers, self.hyper.bptt_truncate)
 
         if checkpointdir:
             self.newcheckpoint(checkpointdir, 0, 0, 0)
