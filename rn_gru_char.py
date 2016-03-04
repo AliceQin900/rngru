@@ -23,15 +23,23 @@ class ModelParams:
         self.state_size = state_size
         self.vocab_size = vocab_size
         self.layers = layers
+
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
-        self.U = U if U else np.random.uniform(-np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (layers*3, state_size, vocab_size))
-        self.V = V if V else np.random.uniform(-np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
-        self.W = W if W else np.random.uniform(-np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
+        # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
+        self.U = U if isinstance(U, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (layers*3, state_size, vocab_size))
+
+        self.V = V if isinstance(V, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
+
+        self.W = W if isinstance(W, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
+
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        self.b = b if b else np.zeros((layers*3, state_size))
-        self.c = c if c else np.zeros(vocab_size)
+        self.b = b if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
+        self.c = c if isinstance(c, np.ndarray) else np.zeros(vocab_size)
 
     @classmethod
     def loadfromfile(cls, infile):
@@ -45,7 +53,7 @@ class ModelParams:
             # Create instance
             model = cls(state_size, vocab_size, layers, U, V, W, b, c)
             if isinstance(infile, str):
-                stderr.write("Loaded model parameters from {0:s}\n".format(infile))
+                stderr.write("Loaded model parameters from {0}\n".format(infile))
 
             return model
 
@@ -56,7 +64,7 @@ class ModelParams:
             raise e
         else:
             if isinstance(outfile, str):
-                stderr.write("Saved model parameters to {0:s}\n".format(outfile))
+                stderr.write("Saved model parameters to {0}\n".format(outfile))
 
 
 class CharSet:
@@ -119,7 +127,7 @@ class DataSet:
             self.x_array = savedarrays['x_array']
             self.y_array = savedarrays['y_array']
 
-            stderr.write("Loaded arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
+            stderr.write("Loaded arrays, x: {0} y: {1}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
         else:
             stderr.write("Processing data string of {0:d} bytes...\n".format(len(datastr)))
@@ -140,7 +148,7 @@ class DataSet:
             self.x_array = np.asarray(x_sequences, dtype='int32')
             self.y_array = np.asarray(y_sequences, dtype='int32')
 
-            stderr.write("Initialized arrays, x: {0:s} y: {1:s}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
+            stderr.write("Initialized arrays, x: {0} y: {1}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
     @staticmethod
     def loadfromfile(filename):
@@ -149,16 +157,16 @@ class DataSet:
         try:
             f = open(filename, 'rb')
         except OSError as e:
-            stderr.write("Couldn't open data set file, error: {0:s}\n".format(e))
+            stderr.write("Couldn't open data set file, error: {0}\n".format(e))
             return None
         else:
             try:
                 dataset = pickle.load(f)
             except Exception as e:
-                stderr.write("Couldn't load data set, error: {0:s}\n".format(e))
+                stderr.write("Couldn't load data set, error: {0}\n".format(e))
                 return None
             else:
-                stderr.write("Loaded data set from {0:s}\n".format(filename))
+                stderr.write("Loaded data set from {0}\n".format(filename))
                 return dataset
         finally:
             f.close()
@@ -181,10 +189,11 @@ class DataSet:
         try:
             f = open(filename, 'wb')
         except OSError as e:
-            stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
+            stderr.write("Couldn't open target file, error: {0}\n".format(e))
             return None
         else:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+            stderr.write("Saved data set to {0}".format(filename))
             return filename
         finally:
             f.close()
@@ -212,18 +221,18 @@ class Checkpoint:
 
         # Determine filenames
         modeldatetime = datetime.datetime.now(datetime.timezone.utc)
-        basefilename = modeldatetime.strftime("%Y-%m-%d-%H-%M-%S-%Z")
+        basefilename = modeldatetime.strftime("%Y-%m-%d-%H:%M:%S-UTC")
 
         # Save model file
         modelfilename = os.path.join(savedir, basefilename + ".npz")
         try:
             modelfile = open(modelfilename, 'wb')
         except OSError as e:
-            stderr.write("Couldn't save model parameters to {0:s}!\nError: {1:s}\n".format(modelfilename, e))
+            stderr.write("Couldn't save model parameters to {0}!\nError: {1}\n".format(modelfilename, e))
             return None, None
         else:
             modelparams.savetofile(modelfile)
-            stderr.write("Saved model parameters to {0:s}\n".format(modelfilename))
+            stderr.write("Saved model parameters to {0}\n".format(modelfilename))
 
             # Create checkpoint
             cp = cls(datafile, modelfilename, modeldatetime, epoch, pos, loss)
@@ -233,11 +242,11 @@ class Checkpoint:
             try:
                 cpfile = open(cpfilename, 'wb')
             except OSError as e:
-                stderr.write("Couldn't save checkpoint to {0:s}!\nError: {1:s}\n".format(cpfilename, e))
+                stderr.write("Couldn't save checkpoint to {0}!\nError: {1}\n".format(cpfilename, e))
                 return None, None
             else:
                 pickle.dump(cp, cpfile, protocol=pickle.HIGHEST_PROTOCOL)
-                stderr.write("Saved checkpoint to {0:s}\n".format(cpfilename))
+                stderr.write("Saved checkpoint to {0}\n".format(cpfilename))
                 return cp, cpfilename
             finally:
                 cpfile.close()
@@ -250,16 +259,16 @@ class Checkpoint:
         try:
             f = open(cpfile, 'rb')
         except OSError as e:
-            stderr.write("Couldn't open checkpoint file {0:s}!\nError: {1:s}\n".format(cpfile, e))
+            stderr.write("Couldn't open checkpoint file {0}!\nError: {1}\n".format(cpfile, e))
             return None
         else:
             try:
                 cp = pickle.load(f)
             except Exception as e:
-                stderr.write("Error restoring checkpoint from file {0:s}:\n{1:s}\n".format(cpfile, e))
+                stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cpfile, e))
                 return None
             else:
-                stderr.write("Restored checkpoint from file {0:s}\n".format(cpfile))
+                stderr.write("Restored checkpoint from file {0}\n".format(cpfile))
                 return cp
         finally:
             f.close()
@@ -267,11 +276,11 @@ class Checkpoint:
     def printstats(self, outfile):
         """Prints checkpoint stats to file-like object."""
 
-        printstr = """Checkpoint date: {0:s}
-        Dataset file: {1:s}
-        Model file: {2:s}
-        Epoch: {3:s}
-        Position: {4:s}
+        printstr = """Checkpoint date: {0}
+        Dataset file: {1}
+        Model file: {2}
+        Epoch: {3:d}
+        Position: {4:d}
         Loss: {5:.4f}
         """.format(
             self.cp_date.strftime("%Y-%m-%d %H:%M:%S %Z"), 
@@ -317,11 +326,11 @@ class ModelState:
         self.__dict__.update(state)
         # Reload checkpoint, if present
         if self.cpfile:
-            self.cp = Checkpoint.loadcheckpoint(cpfile)
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
             if self.cp:
-                stderr.write("Loaded checkpoint from {0:s}\n".format(self.cpfile))
+                stderr.write("Loaded checkpoint from {0}\n".format(self.cpfile))
             else:
-                stderr.write("Couldn't load checkpoint from {0:s}\n".format(self.cpfile))
+                stderr.write("Couldn't load checkpoint from {0}\n".format(self.cpfile))
                 # Checkpoint is invalid, so don't use its file
                 self.cpfile = None
 
@@ -336,14 +345,14 @@ class ModelState:
         try:
             os.makedirs(usedir, exist_ok=True)
         except OSError as e:
-            stderr.write("Error creating directory {}: {}".format(srcfile, e))
+            stderr.write("Error creating directory {0}: {1}".format(srcfile, e))
             raise e
         
         # Next, read source file
         try:
             f = open(srcfile, 'r', encoding='utf-8')
         except OSError as e:
-            stderr.write("Error opening source file {}: {}".format(srcfile, e))
+            stderr.write("Error opening source file {0}: {1}".format(srcfile, e))
             raise e
         else:
             datastr = f.read()
@@ -366,64 +375,79 @@ class ModelState:
         datafilename = dataset.savetofile(dirname)
 
         # Now we can initialize the state
-        modelstate = cls(charset, hyperparams, dirname, srcinfo=(basename + "-state"), 
+        modelstate = cls(hyperparams, charset, dirname, srcinfo=(basename + "-state"), 
             datafile=datafilename, data=dataset)
 
         # And build the model, with optional checkpoint
-        modelstate.buildmodelparams(init_checkpoint)
+        if init_checkpoint:
+            modelstate.buildmodelparams(dirname)
+        else:
+            modelstate.buildmodelparams()
+
+        # Save initial model state
+        modelstate.savetofile(dirname)
 
         return modelstate
 
 
     @staticmethod
     def loadfromfile(filename):
-        """Loads model state from filename."""
+        """Loads model state from filename.
+        Note: dataset and model params can be restored from last checkpoint
+        after loading model state using restorefrom().
+        """
 
         try:
             f = open(filename, 'rb')
         except OSError as e:
-            stderr.write("Couldn't open model state file, error: {0:s}\n".format(e))
+            stderr.write("Couldn't open model state file, error: {0}\n".format(e))
         else:
             try:
                 modelstate = pickle.load(f)
             except Exception as e:
-                stderr.write("Couldn't load model state, error: {0:s}\n".format(e))
+                stderr.write("Couldn't load model state, error: {0}\n".format(e))
                 return None
             else:
-                stderr.write("Loaded model state from {0:s}\n".format(filename))
+                stderr.write("Loaded model state from {0}\n".format(filename))
                 return modelstate
         finally:
             f.close()
 
-    def savetofile(self, savedir=self.curdir):
+    def savetofile(self, savedir):
         """Saves model state to file in savedir.
         Filename taken from srcinfo if possible, otherwise defaults to 'modelstate.p'.
         Returns filename if successful, None otherwise.
         """
 
-        if not savedir:
-            raise FileNotFoundError('No directory specified!')
+        if savedir:
+            usedir = savedir
+        else:
+            if self.curdir:
+                usedir = self.curdir
+            else:
+                raise FileNotFoundError('No directory specified!')
 
         # Create directory if necessary (won't throw exception if dir already exists)
         try:
-            os.makedirs(savedir, exist_ok=True)
+            os.makedirs(usedir, exist_ok=True)
         except OSError as e:
             raise e
         else:
             if isinstance(self.srcinfo, str):
-                filename = os.path.join(savedir, self.srcinfo + ".p")
+                filename = os.path.join(usedir, self.srcinfo + ".p")
             elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
-                filename = os.path.join(savedir, self.srcinfo['name'] + ".p")
+                filename = os.path.join(usedir, self.srcinfo['name'] + ".p")
             else:
-                filename = os.path.join(savedir, "modelstate.p")
+                filename = os.path.join(usedir, "modelstate.p")
 
             try:
                 f = open(filename, 'wb')
             except OSError as e:
-                stderr.write("Couldn't open target file, error: {0:s}\n".format(e))
+                stderr.write("Couldn't open target file, error: {0}\n".format(e))
                 return None
             else:
                 pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+                stderr.write("Saved model state to {0}".format(filename))
                 return filename
             finally:
                 f.close()
@@ -525,7 +549,7 @@ class ModelState:
         else:
             return False
 
-    def newcheckpoint(self, epoch, pos, loss):
+    def newcheckpoint(self, savedir, epoch, pos, loss):
         """Creates new checkpoint with current datafile and model params."""
 
         # Make sure we have prereqs
@@ -537,7 +561,7 @@ class ModelState:
             return False
 
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(self.datafile, self.model, epoch, pos, loss)
+        cp, cpfile = Checkpoint.createcheckpoint(savedir, self.datafile, self.model, epoch, pos, loss)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
@@ -560,13 +584,13 @@ class ModelState:
         else:
             return False
 
-    def buildmodelparams(self, checkpoint=False):
+    def buildmodelparams(self, checkpointdir=None):
         """Builds model parameters from current hyperparameters and charset size.
-        Optionally saves checkpoint immediately after building.
+        Optionally saves checkpoint immediately after building if path specified.
         """
 
         self.model = ModelParams(self.hyper.state_size, self.chars.vocab_size, self.hyper.layers)
 
-        if checkpoint:
-            self.newcheckpoint(0, 0, 0)
+        if checkpointdir:
+            self.newcheckpoint(checkpointdir, 0, 0, 0)
 
