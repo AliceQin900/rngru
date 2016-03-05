@@ -35,23 +35,22 @@ class ModelParams:
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        # Hard-set to float32 to allow either CPU or GPU usage
         self.E = E if isinstance(E, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size)).astype('float32')
+            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size))
 
         self.U = U if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size)).astype('float32')
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
 
         self.W = W if isinstance(W, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size)).astype('float32')
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
 
         self.V = V if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size)).astype('float32')
+            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        self.b = b if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size)).astype('float32')
-        self.c = c if isinstance(c, np.ndarray) else np.zeros(vocab_size).astype('float32')
+        self.b = b if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
+        self.c = c if isinstance(c, np.ndarray) else np.zeros(vocab_size)
 
         # Build Theano graph and add related attributes
         self.__build_t__()
@@ -61,20 +60,20 @@ class ModelParams:
         self.theano = {}
 
         # Shared variables
-        self.tE = theano.shared(name='E', value=self.E)
-        self.tU = theano.shared(name='U', value=self.U)
-        self.tW = theano.shared(name='W', value=self.W)
-        self.tV = theano.shared(name='V', value=self.V)
-        self.tb = theano.shared(name='b', value=self.b)
-        self.tc = theano.shared(name='c', value=self.c)
+        self.tE = theano.shared(name='E', value=self.E.astype(theano.config.floatX))
+        self.tU = theano.shared(name='U', value=self.U.astype(theano.config.floatX))
+        self.tW = theano.shared(name='W', value=self.W.astype(theano.config.floatX))
+        self.tV = theano.shared(name='V', value=self.V.astype(theano.config.floatX))
+        self.tb = theano.shared(name='b', value=self.b.astype(theano.config.floatX))
+        self.tc = theano.shared(name='c', value=self.c.astype(theano.config.floatX))
 
         # rmsprop parameters
-        self.mE = theano.shared(name='mE', value=np.zeros(self.E.shape).astype('float32'))
-        self.mU = theano.shared(name='mU', value=np.zeros(self.U.shape).astype('float32'))
-        self.mW = theano.shared(name='mW', value=np.zeros(self.W.shape).astype('float32'))
-        self.mV = theano.shared(name='mV', value=np.zeros(self.V.shape).astype('float32'))
-        self.mb = theano.shared(name='mb', value=np.zeros(self.b.shape).astype('float32'))
-        self.mc = theano.shared(name='mc', value=np.zeros(self.c.shape).astype('float32'))
+        self.mE = theano.shared(name='mE', value=np.zeros(self.E.shape).astype(theano.config.floatX))
+        self.mU = theano.shared(name='mU', value=np.zeros(self.U.shape).astype(theano.config.floatX))
+        self.mW = theano.shared(name='mW', value=np.zeros(self.W.shape).astype(theano.config.floatX))
+        self.mV = theano.shared(name='mV', value=np.zeros(self.V.shape).astype(theano.config.floatX))
+        self.mb = theano.shared(name='mb', value=np.zeros(self.b.shape).astype(theano.config.floatX))
+        self.mc = theano.shared(name='mc', value=np.zeros(self.c.shape).astype(theano.config.floatX))
 
         # Inputs
         x = T.ivector('x')
@@ -136,8 +135,8 @@ class ModelParams:
         dc = T.grad(cost, c)
 
         # rmsprop parameters and updates
-        learnrate = T.scalar('learnrate', dtype='float32')
-        decayrate = T.scalar('decayrate', dtype='float32')
+        learnrate = T.scalar('learnrate')
+        decayrate = T.scalar('decayrate')
         mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
         mU = decayrate * self.mU + (1 - decayrate) * dU ** 2
         mW = decayrate * self.mW + (1 - decayrate) * dW ** 2
