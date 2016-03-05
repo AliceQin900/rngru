@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, datetime, pickle
+import os, datetime, pickle, random
 from sys import stdin, stdout, stderr
 import numpy as np
 import theano
@@ -121,7 +121,7 @@ class ModelParams:
         [o, s], updates = theano.scan(
             forward_step, sequences=x, truncate_gradient=self.bptt_truncate,
             outputs_info=[None, dict(initial=T.zeros([self.layers, self.state_size]))])
-        predict = T.argmax(o, axis=1)
+        #predict = T.argmax(o, axis=1)
         o_err = T.sum(T.nnet.categorical_crossentropy(o, y))
         # Should regularize at some point
         cost = o_err
@@ -148,7 +148,7 @@ class ModelParams:
         # Predicted char probabilities
         self.predict_prob = theano.function([x], o)
         # Predicted next char
-        self.predict_next = theano.function([x], predict)
+        #self.predict_next = theano.function([x], predict)
         # Error
         self.err = theano.function([x, y], cost)
         # Backpropagation
@@ -205,6 +205,47 @@ class ModelParams:
     def calc_loss(self, X, Y):
         return self.calc_total_loss(X, Y) / float(Y.size)
 
+    def train(self, inputs, outputs, learnrate=0.001, decayrate=0.9,
+        num_epochs=10, callback_every=10000, callback=None):
+        """Train model on given inputs/outputs for given num_epochs.
+        Optional callback function called after callback_every, with 
+        model, epoch, and pos as arguments.
+        Inputs and outputs assumed to be numpy arrays (or equivalent)
+        of 2 dimensions.
+        """
+        # Use explicit indexing so we can keep track, both for
+        # checkpoint purposes, and to check against callback_every
+        input_len = inputs.shape[0]
+
+        # Each epoch is a full pass through the training set
+        for epoch in range(num_epochs):
+            for pos in range(input_len):
+                # Learning step
+                self.train_step(inputs[pos], outputs[pos], learnrate, decayrate)
+                # Optional callback
+                if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
+                    callback(self, epoch, pos)
+
+    def genchars(self, charset, numchars):
+        """Generate string of characters."""
+
+        # Seed random character to start
+        idxs = [charset.randomidx()]
+
+        # To generate a sequence, unfortunately (with Theano being a little
+        # bit of a black box) we have to feed the whole sequence back in each time
+        for _ in range(numchars):
+            # Get probability vector of next char
+            next_prob = self.predict_prob(idxs)[-1]
+            # Choose char from weighted random choice
+            next_idx = np.random.choice(charset.vocab_size, p=next_prob)
+            # Append to list, and round we go
+            idxs.append(next_idx)
+
+        # Now translate from indicies to characters, and construct string
+        chars = [ charset.charatidx(i) for i in idxs ]
+        return "".join(chars)
+
 
 class CharSet:
     """Character set with bidirectional mappings."""
@@ -247,6 +288,13 @@ class CharSet:
             return self._idx_to_char[idx]
         else:
             return self.unknown_char
+
+    def randomidx(self):
+        '''Returns random character, excluding unknown_char.'''
+        char = self.unknown_idx
+        while char == self.unknown_idx:
+            char = random.randrange(self.vocab_size)
+        return char
 
         
 class DataSet:
