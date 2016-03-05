@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, datetime, pickle, random
+import os, datetime, pickle, random, time
 from sys import stdin, stdout, stderr
 import numpy as np
 import theano
@@ -245,6 +245,17 @@ class ModelParams:
         # Now translate from indicies to characters, and construct string
         chars = [ charset.charatidx(i) for i in idxs ]
         return "".join(chars)
+
+    def traintime(self, inputvec, outputvec, learnrate=0.001, decayrate=0.9):
+        """Prints time for single training step.
+        Input should be single-dim vector.
+        """
+        time1 = time.time()
+        self.train_step(inputvec, outputvec, learnrate, decayrate)
+        time2 = time.time()
+
+        stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
+            len(inputvec), (time2 - time1) * 1000.0))
 
 
 class CharSet:
@@ -736,8 +747,10 @@ class ModelState:
         else:
             return False
 
-    def newcheckpoint(self, savedir, epoch, pos, loss):
-        """Creates new checkpoint with current datafile and model params."""
+    def newcheckpoint(self, epoch, pos, loss, savedir=None):
+        """Creates new checkpoint with current datafile and model params.
+        Defaults to saving into current working directory.
+        """
 
         # Make sure we have prereqs
         if not self.datafile:
@@ -747,12 +760,21 @@ class ModelState:
             stderr.write("Can't create checkpoint: no model loaded.\n")
             return False
 
+        # Use specified dir if provided, otherwise curdir
+        usedir = savedir if savedir else self.curdir
+
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(savedir, self.datafile, self.model, epoch, pos, loss)
+        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, epoch, pos, loss)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
-            return True
+            # Also save ourselves
+            savefile = self.savetofile(usedir)
+            if savefile:
+                stderr.write("Saved model state to {0}\n".format(savefile))
+                return True
+            else:
+                return False
         else:
             return False
 
@@ -781,4 +803,11 @@ class ModelState:
 
         if checkpointdir:
             self.newcheckpoint(checkpointdir, 0, 0, 0)
+
+    def printprogress(model, epoch, pos):
+        print("--------\n")
+        print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
+        print("Epoch: {0}, pos: {1}".format(epoch, pos))
+        print("Generated 100 chars:\n")
+        print(model.genchars(self.chars, 100) + "\n")
 
