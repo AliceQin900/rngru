@@ -503,7 +503,7 @@ class DataSet:
             return None
         else:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-            stderr.write("Saved data set to {0}".format(filename))
+            stderr.write("Saved data set to {0}\n".format(filename))
             return filename
         finally:
             f.close()
