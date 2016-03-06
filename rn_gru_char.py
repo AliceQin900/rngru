@@ -55,7 +55,8 @@ class ModelParams:
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, a and c are single 2D
         # a is initalized randomly, b and c are zeros
-        ta = np.copy(a) if isinstance(a, np.ndarray) else np.zeros(hyper.state_size)
+        ta = np.copy(a) if isinstance(a, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), hyper.vocab_size)
         tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
         tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
@@ -124,7 +125,10 @@ class ModelParams:
             # Basically a is a bias vector against x_vec, so E can be 
             # dotted against more than a one-hot vector
             # (Otherwise, E is basically bypassed value-wise)
-            inout = T.nnet.hard_sigmoid(E.dot(x_vec) + a)
+
+            # Theano softmax returns one-row matrix, return just row
+            # (Will have to be changed once batching implemented)
+            inout = T.nnet.softmax(E.dot(x_vec + a))[0]
 
             # Loop over layers
             for layer in range(layers):
@@ -145,8 +149,6 @@ class ModelParams:
                 inout = s_new
 
             # Final output
-            # Theano softmax returns one-row matrix, return just row
-            # (Will have to be changed once batching implemented)
             o_t = T.nnet.softmax(V.dot(inout) + c)[0]
             return o_t, s_next
 
