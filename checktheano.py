@@ -27,7 +27,7 @@ def dotandadd(x_t, acc_t):
     sequences=[x])
 
 acc_end = acc_seq[-1]
-dotandaddseq = theano.function([x, acc], [x_seq, acc_end])
+dotandaddseq = theano.function([x, acc], [x_seq, acc_end], allow_input_downcast=True)
 
 k = T.iscalar('k')
 
@@ -40,8 +40,8 @@ acc_k_seq, updates = theano.scan(
     n_steps=k)
 
 acc_k=acc_k_seq[-1]
-dotandaddacc = theano.function([acc, k], acc_k)
-dotandaddaccseq = theano.function([acc, k], acc_k_seq)
+dotandaddacc = theano.function([acc, k], acc_k, allow_input_downcast=True)
+dotandaddaccseq = theano.function([acc, k], acc_k_seq, allow_input_downcast=True)
 
 def dotandsoftmax(acc_t):
     return T.nnet.softmax(mat.dot(acc_t))[0]
@@ -51,7 +51,7 @@ acc_s_seq, updates = theano.scan(
     outputs_info=[dict(initial=acc)],
     n_steps=k)
 acc_s = acc_s_seq[-1]
-dotandsoftacc = theano.function([acc, k], acc_s)
+dotandsoftacc = theano.function([acc, k], acc_s, allow_input_downcast=True)
 
 rng = T.shared_randomstreams.RandomStreams(seed=6547619)
 i_vec = T.vector('i_vec')
@@ -77,7 +77,7 @@ x_v = T.vector('x_v')
     fn=dotandprob,
     outputs_info=[dict(initial=x_v), None],
     n_steps=k)
-dotprob = theano.function([x_v, k], [x_v_seq, idx_seq], updates=updates)
+dotprob = theano.function([x_v, k], [x_v_seq, idx_seq], updates=updates, allow_input_downcast=True)
 
 
 # Run
