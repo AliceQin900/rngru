@@ -35,59 +35,72 @@ class ModelParams:
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        self.E = E if isinstance(E, np.ndarray) else np.random.uniform(
+        tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size))
 
-        self.U = U if isinstance(U, np.ndarray) else np.random.uniform(
+        tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
 
-        self.W = W if isinstance(W, np.ndarray) else np.random.uniform(
+        tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
 
-        self.V = V if isinstance(V, np.ndarray) else np.random.uniform(
+        tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        self.b = b if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
-        self.c = c if isinstance(c, np.ndarray) else np.zeros(vocab_size)
+        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
+        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(vocab_size)
+
+        # Shared variables
+        self.E = theano.shared(name='E', value=tE.astype(theano.config.floatX))
+        self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
+        self.W = theano.shared(name='W', value=tW.astype(theano.config.floatX))
+        self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
+        self.b = theano.shared(name='b', value=tb.astype(theano.config.floatX))
+        self.c = theano.shared(name='c', value=tc.astype(theano.config.floatX))
+
+        # rmsprop parameters
+        self.mE = theano.shared(name='mE', value=np.zeros_like(tE).astype(theano.config.floatX))
+        self.mU = theano.shared(name='mU', value=np.zeros_like(tU).astype(theano.config.floatX))
+        self.mW = theano.shared(name='mW', value=np.zeros_like(tW).astype(theano.config.floatX))
+        self.mV = theano.shared(name='mV', value=np.zeros_like(tV).astype(theano.config.floatX))
+        self.mb = theano.shared(name='mb', value=np.zeros_like(tb).astype(theano.config.floatX))
+        self.mc = theano.shared(name='mc', value=np.zeros_like(tc).astype(theano.config.floatX))
 
         # Build Theano graph and add related attributes
+        self.theano = {}
+        stdout.write("Compiling Theano graph and functions...")
+        stdout.flush()
+        time1 = time.time()
         self.__build_t__()
+        time2 = time.time()
+        stdout.write("done!\nCompilation took {0:.3f} ms.\n".format((time2 - time1) * 1000.0))
+        stdout.flush()
 
     def __build_t__(self):
         """Build Theano graph and define functions."""
-        self.theano = {}
-
-        # Shared variables
-        self.tE = theano.shared(name='E', value=self.E.astype(theano.config.floatX))
-        self.tU = theano.shared(name='U', value=self.U.astype(theano.config.floatX))
-        self.tW = theano.shared(name='W', value=self.W.astype(theano.config.floatX))
-        self.tV = theano.shared(name='V', value=self.V.astype(theano.config.floatX))
-        self.tb = theano.shared(name='b', value=self.b.astype(theano.config.floatX))
-        self.tc = theano.shared(name='c', value=self.c.astype(theano.config.floatX))
-
-        # rmsprop parameters
-        self.mE = theano.shared(name='mE', value=np.zeros(self.E.shape).astype(theano.config.floatX))
-        self.mU = theano.shared(name='mU', value=np.zeros(self.U.shape).astype(theano.config.floatX))
-        self.mW = theano.shared(name='mW', value=np.zeros(self.W.shape).astype(theano.config.floatX))
-        self.mV = theano.shared(name='mV', value=np.zeros(self.V.shape).astype(theano.config.floatX))
-        self.mb = theano.shared(name='mb', value=np.zeros(self.b.shape).astype(theano.config.floatX))
-        self.mc = theano.shared(name='mc', value=np.zeros(self.c.shape).astype(theano.config.floatX))
 
         # Inputs
         x = T.ivector('x')
         y = T.ivector('y')
+        s_in = T.matrix('s_in')
 
         # Constants(ish)
         layers = self.layers
+        vocab_size = self.vocab_size
+        state_size = self.state_size
+        #state_zeros = np.zeros([self.layers, self.state_size])
 
         # Local bindings for convenience
-        E, U, W, V, b, c = self.tE, self.tU, self.tW, self.tV, self.tb, self.tc
+        E, U, W, V, b, c = self.E, self.U, self.W, self.V, self.b, self.c
 
         # Forward propagation
         def forward_step(x_t, s_t):
             """Input vector x(t) and state matrix s(t)."""
+
+            # Initialize state to return
+            s_next = T.zeros_like(s_t)
 
             # Input to first layer (taking shortcut by getting column of E)
             # ((Equivalent to multiplying E by x_t as one-hot vector))
@@ -106,22 +119,23 @@ class ModelParams:
                 # Candidate state
                 h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(s_prev * r) + b[L+2])
                 # New state
-                s = (T.ones_like(z) - z) * h + z * s_prev
-                s_t = T.set_subtensor(s_t[layer], s)
+                s_new = (T.ones_like(z) - z) * h + z * s_prev
+                s_next = T.set_subtensor(s_next[layer], s_new)
                 # Update for next layer or final output (might add dropout here later)
-                inout = s
+                inout = s_new
 
             # Final output
             # Theano softmax returns one-row matrix, return just row
             # (Will have to be changed once batching implemented)
             o_t = T.nnet.softmax(V.dot(inout) + c)[0]
-            return [o_t, s_t]
+            return o_t, s_next
 
         # Now get Theano to do the heavy lifting
-        [o, s], updates = theano.scan(
+        [o, s_seq], updates = theano.scan(
             forward_step, sequences=x, truncate_gradient=self.bptt_truncate,
-            outputs_info=[None, dict(initial=T.zeros([self.layers, self.state_size]))])
-        #predict = T.argmax(o, axis=1)
+            outputs_info=[None, dict(initial=s_in)])
+        s_out = s_seq[-1]
+
         o_err = T.sum(T.nnet.categorical_crossentropy(o, y))
         # Should regularize at some point
         cost = o_err
@@ -134,7 +148,7 @@ class ModelParams:
         dV = T.grad(cost, V)
         dc = T.grad(cost, c)
 
-        # rmsprop parameters and updates
+        # rmsprop parameter updates
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
         mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
@@ -145,18 +159,17 @@ class ModelParams:
         mc = decayrate * self.mc + (1 - decayrate) * dc ** 2
 
         # Assign Theano-constructed functions to instance
-        # Predicted char probabilities
-        self.predict_prob = theano.function([x], o)
-        # Predicted next char
-        #self.predict_next = theano.function([x], predict)
+
+        # We'll use these at some point for gradient checking
         # Error
-        self.err = theano.function([x, y], cost)
+        self.err = theano.function([x, y, s_in], cost)
         # Backpropagation
-        self.bptt = theano.function([x, y], [dE, dU, dW, db, dV, dc])
+        self.bptt = theano.function([x, y, s_in], [dE, dU, dW, db, dV, dc])
+
         # Training step function
         self.train_step = theano.function(
-            [x, y, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
-            [],
+            [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
+            s_out,
             updates=[
                 (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
                 (U, U - learnrate * dU / T.sqrt(mU + 1e-6)),
@@ -169,7 +182,47 @@ class ModelParams:
                 (self.mW, mW),
                 (self.mb, mb),
                 (self.mV, mV),
-                (self.mc, mc)])
+                (self.mc, mc)],
+            name = 'train_step')
+
+        # Predicted char probabilities (old version, reqires recursive sequence input)
+        self.predict_prob = theano.function([x, s_in], [o, s_out])
+        # Predicted most-likely next char
+        predict = T.argmax(o, axis=1)
+        self.predict_max = theano.function([x, s_in], [predict, s_out])
+
+        # Generate output sequence based on input char index and state (new version)
+        x_in = T.iscalar('x_in')
+        k = T.iscalar('k')
+        rng = T.shared_randomstreams.RandomStreams(seed=int(
+            self.E.get_value()[0,0] + self.U.get_value()[0,0,0] + 
+            self.W.get_value()[0,0,0] + self.V.get_value()[0,0]))
+
+        def generate_step(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Normalize output probabilities to sum to 1
+            #norm = T.sum(o_t1)
+            #o_norm = o_t1 / norm
+            # Randomly choose by multinomial distribution
+            #o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_norm)
+            o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
+            # Now find selected index
+            o_idx = T.argmax(o_rand).astype('int32')
+
+            # Return most likely next index
+            #o_idx = T.argmax(o_t1).astype('int32')
+
+            return o_idx, s_t1
+
+        [o_chs, s_chs], genupdate = theano.scan(
+            fn=generate_step,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_ch = s_chs[-1]
+        self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
+
         # Whew, I think we're done!
         # (Loss functions further down)
 
@@ -192,7 +245,9 @@ class ModelParams:
     def savetofile(self, outfile):
         p = np.array([self.state_size, self.vocab_size, self.layers, self.bptt_truncate])
         try:
-            np.savez(outfile, p=p, E=self.E, U=self.U, W=self.W, V=self.V, b=self.b, c=self.c)
+            np.savez(outfile, p=p, 
+                E=self.E.get_value(), U=self.U.get_value(), W=self.W.get_value(), 
+                V=self.V.get_value(), b=self.b.get_value(), c=self.c.get_value())
         except OSError as e:
             raise e
         else:
@@ -200,58 +255,111 @@ class ModelParams:
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
 
     def calc_total_loss(self, X, Y):
-        return np.sum([self.err(x, y) for x, y in zip(X, Y)])
+        return np.sum([self.err(x, y, self.freshstate()) for x, y in zip(X, Y)])
 
     def calc_loss(self, X, Y):
         return self.calc_total_loss(X, Y) / float(Y.size)
 
+    def freshstate(self):
+        return np.zeros([self.layers, self.state_size], dtype=theano.config.floatX)
+
     def train(self, inputs, outputs, learnrate=0.001, decayrate=0.9,
-        num_epochs=10, callback_every=10000, callback=None):
+        num_epochs=10, num_pos=0, callback_every=10000, callback=None):
         """Train model on given inputs/outputs for given num_epochs.
         Optional callback function called after callback_every, with 
         model, epoch, and pos as arguments.
         Inputs and outputs assumed to be numpy arrays (or equivalent)
         of 2 dimensions.
+        If num_epochs is 0, will only train on num_pos examples.
         """
         # Use explicit indexing so we can keep track, both for
         # checkpoint purposes, and to check against callback_every
         input_len = inputs.shape[0]
 
-        # Each epoch is a full pass through the training set
-        for epoch in range(num_epochs):
-            for pos in range(input_len):
+        if num_epochs:
+            # Each epoch is a full pass through the training set
+            for epoch in range(num_epochs):
+                # Fresh state
+                step_state = self.freshstate()
+                # Loop over training data
+                for pos in range(input_len):
+                    # Learning step
+                    step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
+                    # Optional callback
+                    if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
+                        callback(self, epoch, pos)
+        else:
+            step_state = self.freshstate()
+            # Loop over training data
+            for pos in range(num_pos):
                 # Learning step
-                self.train_step(inputs[pos], outputs[pos], learnrate, decayrate)
+                step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
                 # Optional callback
-                if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
-                    callback(self, epoch, pos)
+                if callback and callback_every and pos % callback_every == 0:
+                    callback(self, 0, pos)
 
-    def genchars(self, charset, numchars):
-        """Generate string of characters."""
+
+    def genchars(self, charset, numchars, init_state=None):
+        """Generate string of characters from current model parameters."""
+
+        # Fresh state
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
+
+        # Seed random character to start
+        seedch = charset.randomidx()
+
+        # Get generated sequence
+        idxs, end_state = self.gen_chars(numchars, seedch, start_state)
+
+        # Now translate from indicies to characters, and construct string
+        chars = [ charset.charatidx(i) for i in idxs ]
+        return charset.charatidx(seedch) + "".join(chars), end_state
+
+    def genchars_prob(self, charset, numchars, init_state=None, choose_max=False):
+        """Generate string of characters from current model parameters, 
+        using predicted next char probabilities (recursive version).
+        """
+
+        # Fresh state
+        prev_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
         # Seed random character to start
         idxs = [charset.randomidx()]
 
-        # To generate a sequence, unfortunately (with Theano being a little
-        # bit of a black box) we have to feed the whole sequence back in each time
-        for _ in range(numchars):
-            # Get probability vector of next char
-            next_prob = self.predict_prob(idxs)[-1]
-            # Choose char from weighted random choice
-            next_idx = np.random.choice(charset.vocab_size, p=next_prob)
-            # Append to list, and round we go
-            idxs.append(next_idx)
+        # Choose the probabilistic version or the most-likely one
+        # Note: we don't feed in the updated state, because predict_prob looks at
+        # the whole sequence we feed (back) in
+        if choose_max:
+            for _ in range(numchars):
+                # Get most-likely next char
+                next_chars, next_state = self.predict_max(idxs, prev_state)
+                # Append to list, and round we go
+                idxs.append(next_chars[-1])
+        else:
+            for _ in range(numchars):
+                # Get probability vector of next char
+                next_probs, next_state = self.predict_prob(idxs, prev_state)
+                # Choose char from weighted random choice
+                next_idx = np.random.choice(charset.vocab_size, p=next_probs[-1])
+                # Append to list, and round we go
+                idxs.append(next_idx)
 
         # Now translate from indicies to characters, and construct string
         chars = [ charset.charatidx(i) for i in idxs ]
-        return "".join(chars)
 
-    def traintime(self, inputvec, outputvec, learnrate=0.001, decayrate=0.9):
+        # We *do*, however, return the final updated state
+        return "".join(chars), next_state
+
+
+    def traintime(self, inputvec, outputvec, init_state=None, learnrate=0.001, decayrate=0.9):
         """Prints time for single training step.
         Input should be single-dim vector.
         """
+        # Fresh state
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
+
         time1 = time.time()
-        self.train_step(inputvec, outputvec, learnrate, decayrate)
+        self.train_step(inputvec, outputvec, start_state, learnrate, decayrate)
         time2 = time.time()
 
         stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
@@ -300,10 +408,14 @@ class CharSet:
         else:
             return self.unknown_char
 
-    def randomidx(self):
+    def randomidx(self, allow_newline=False):
         '''Returns random character, excluding unknown_char.'''
+        forbidden = [self.unknown_idx]
+        if not allow_newline:
+            forbidden.append(self.idxofchar('\n'))
+
         char = self.unknown_idx
-        while char == self.unknown_idx:
+        while char in forbidden:
             char = random.randrange(self.vocab_size)
         return char
 
@@ -771,7 +883,7 @@ class ModelState:
             # Also save ourselves
             savefile = self.savetofile(usedir)
             if savefile:
-                stderr.write("Saved model state to {0}\n".format(savefile))
+                #stderr.write("Saved model state to {0}\n".format(savefile))
                 return True
             else:
                 return False
@@ -804,10 +916,14 @@ class ModelState:
         if checkpointdir:
             self.newcheckpoint(checkpointdir, 0, 0, 0)
 
-    def printprogress(model, epoch, pos):
+# Unattached functions
+
+def printprogress(charset):
+    def retfunc (model, epoch, pos):
         print("--------\n")
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
         print("Epoch: {0}, pos: {1}".format(epoch, pos))
         print("Generated 100 chars:\n")
-        print(model.genchars(self.chars, 100) + "\n")
-
+        genstr, _ = model.genchars(charset, 100)
+        print(genstr + "\n")
+    return retfunc
