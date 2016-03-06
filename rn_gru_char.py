@@ -9,10 +9,10 @@ import theano.tensor as T
 class HyperParams:
     """Hyperparameters for GRU setup."""
 
-    def __init__(self, state_size=128, layers=1, seq_len=100, bptt_truncate=-1, learnrate=0.001, decay=0.9):
+    def __init__(self, vocab_size, state_size=128, layers=1, bptt_truncate=-1, learnrate=0.001, decay=0.9):
+        self.vocab_size = vocab_size
         self.state_size = state_size
         self.layers = layers
-        self.seq_len = seq_len
         self.bptt_truncate = bptt_truncate
         self.learnrate = learnrate
         self.decay = decay
@@ -25,12 +25,10 @@ class ModelParams:
     V translates back to vocab-sized vector for output.
     """
 
-    def __init__(self, state_size, vocab_size, layers=1, bptt_truncate=-1, epoch=0, pos=0,
-        E=None, U=None, W=None, V=None, b=None, c=None):
-        self.state_size = state_size
-        self.vocab_size = vocab_size
-        self.layers = layers
-        self.bptt_truncate = bptt_truncate
+    def __init__(self, hyper, epoch=0, pos=0,
+        E=None, U=None, W=None, V=None, a=None, b=None, c=None):
+
+        self.hyper = hyper
         self.epoch = epoch
         self.pos = pos
 
@@ -39,27 +37,35 @@ class ModelParams:
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
         # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
         tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size))
+            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
+            (hyper.state_size, hyper.vocab_size))
 
         tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
+            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
+            (hyper.layers*3, hyper.state_size, hyper.state_size))
 
         tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (layers*3, state_size, state_size))
+            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
+            (hyper.layers*3, hyper.state_size, hyper.state_size))
 
         tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/state_size), np.sqrt(1.0/state_size), (vocab_size, state_size))
+            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
+            (hyper.vocab_size, hyper.state_size))
 
         # Initialize bias matrices to zeroes
-        # b gets 3x2D per layer, c is single 2D
-        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((layers*3, state_size))
-        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(vocab_size)
+        # b gets 3x2D per layer, a and c are single 2D
+        # a is initalized randomly, b and c are zeros
+        ta = np.copy(a) if isinstance(a, np.ndarray) else np.random.uniform(
+            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), hyper.vocab_size)
+        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
+        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
         # Shared variables
         self.E = theano.shared(name='E', value=tE.astype(theano.config.floatX))
         self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
         self.W = theano.shared(name='W', value=tW.astype(theano.config.floatX))
         self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
+        self.a = theano.shared(name='a', value=ta.astype(theano.config.floatX))
         self.b = theano.shared(name='b', value=tb.astype(theano.config.floatX))
         self.c = theano.shared(name='c', value=tc.astype(theano.config.floatX))
 
@@ -68,6 +74,7 @@ class ModelParams:
         self.mU = theano.shared(name='mU', value=np.zeros_like(tU).astype(theano.config.floatX))
         self.mW = theano.shared(name='mW', value=np.zeros_like(tW).astype(theano.config.floatX))
         self.mV = theano.shared(name='mV', value=np.zeros_like(tV).astype(theano.config.floatX))
+        self.ma = theano.shared(name='ma', value=np.zeros_like(ta).astype(theano.config.floatX))
         self.mb = theano.shared(name='mb', value=np.zeros_like(tb).astype(theano.config.floatX))
         self.mc = theano.shared(name='mc', value=np.zeros_like(tc).astype(theano.config.floatX))
 
@@ -90,15 +97,12 @@ class ModelParams:
         s_in = T.matrix('s_in')
 
         # Constants(ish)
-        layers = self.layers
-        vocab_size = self.vocab_size
-        state_size = self.state_size
-        #state_zeros = np.zeros([self.layers, self.state_size])
+        layers = self.hyper.layers
+        vocab_size = self.hyper.vocab_size
+        state_size = self.hyper.state_size
 
         # Local bindings for convenience
-        E, U, W, V, b, c = self.E, self.U, self.W, self.V, self.b, self.c
-
-        x_iden = T.eye(vocab_size, vocab_size)
+        E, U, W, V, a, b, c = self.E, self.U, self.W, self.V, self.a, self.b, self.c
 
         # Forward propagation
         def forward_step(x_t, s_t):
@@ -111,11 +115,20 @@ class ModelParams:
             # ((Equivalent to multiplying E by x_t as one-hot vector))
             #inout = E[:,x_t]
 
-            # Create one-hot vector from x_t using column of x_iden
-            x_vec = x_iden[:,x_t]
+            # Not taking shortcut anymore
 
-            # Not taking shortcut anymore - model wasn't learning E
-            inout = E.dot(x_vec)
+            # Create one-hot vector from x_t using column of xI
+            xI = T.eye(vocab_size, vocab_size)
+            x_vec = xI[:,x_t]
+
+            # First input to layer(s) goes through E
+            # Basically a is a bias vector against x_vec, so E can be 
+            # dotted against more than a one-hot vector
+            # (Otherwise, E is basically bypassed value-wise)
+
+            # Theano softmax returns one-row matrix, return just row
+            # (Will have to be changed once batching implemented)
+            inout = T.nnet.softmax(E.dot(x_vec + a))[0]
 
             # Loop over layers
             for layer in range(layers):
@@ -136,14 +149,12 @@ class ModelParams:
                 inout = s_new
 
             # Final output
-            # Theano softmax returns one-row matrix, return just row
-            # (Will have to be changed once batching implemented)
             o_t = T.nnet.softmax(V.dot(inout) + c)[0]
             return o_t, s_next
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], updates = theano.scan(
-            forward_step, sequences=x, truncate_gradient=self.bptt_truncate,
+            forward_step, sequences=x, truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in)])
         s_out = s_seq[-1]
 
@@ -153,6 +164,7 @@ class ModelParams:
 
         # Gradients
         dE = T.grad(cost, E)
+        da = T.grad(cost, a)
         dU = T.grad(cost, U)
         dW = T.grad(cost, W)
         db = T.grad(cost, b)
@@ -163,6 +175,7 @@ class ModelParams:
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
         mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
+        ma = decayrate * self.ma + (1 - decayrate) * da ** 2
         mU = decayrate * self.mU + (1 - decayrate) * dU ** 2
         mW = decayrate * self.mW + (1 - decayrate) * dW ** 2
         mb = decayrate * self.mb + (1 - decayrate) * db ** 2
@@ -175,7 +188,7 @@ class ModelParams:
         self.err = theano.function([x, y, s_in], [cost, s_out])
         # Backpropagation
         # We'll use this at some point for gradient checking
-        self.bptt = theano.function([x, y, s_in], [dE, dU, dW, db, dV, dc])
+        self.bptt = theano.function([x, y, s_in], [dE, da, dU, dW, db, dV, dc])
 
         # Training step function
         self.train_step = theano.function(
@@ -183,12 +196,14 @@ class ModelParams:
             s_out,
             updates=[
                 (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
+                (a, a - learnrate * da / T.sqrt(ma + 1e-6)),
                 (U, U - learnrate * dU / T.sqrt(mU + 1e-6)),
                 (W, W - learnrate * dW / T.sqrt(mW + 1e-6)),
                 (b, b - learnrate * db / T.sqrt(mb + 1e-6)),
                 (V, V - learnrate * dV / T.sqrt(mV + 1e-6)),
                 (c, c - learnrate * dc / T.sqrt(mc + 1e-6)),
                 (self.mE, mE),
+                (self.ma, ma),
                 (self.mU, mU),
                 (self.mW, mW),
                 (self.mb, mb),
@@ -241,24 +256,31 @@ class ModelParams:
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
-            p, E, U, W, V, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['b'], f['c']
+            p, E, U, W, V, a, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
 
             # Extract hyperparams and position
-            state_size, vocab_size, layers, bptt_truncate, epoch, pos = p[0], p[1], p[2], p[3], p[4], p[5]
+            params = pickle.loads(p.tobytes())
+            hyper, epoch, pos = params['hyper'], params['epoch'], params['pos']
 
             # Create instance
-            model = cls(state_size, vocab_size, layers, bptt_truncate, epoch, pos, E=E, U=U, W=W, V=V, b=b, c=c)
+            model = cls(hyper, epoch, pos, E=E, U=U, W=W, V=V, a=a, b=b, c=c)
             if isinstance(infile, str):
                 stderr.write("Loaded model parameters from {0}\n".format(infile))
 
             return model
 
     def savetofile(self, outfile):
-        p = np.array([self.state_size, self.vocab_size, self.layers, self.bptt_truncate, self.epoch, self.pos])
+        # Pickle non-matrix params into bytestring, then convert to numpy byte array
+        pklbytes = pickle.dumps({'hyper': self.hyper, 'epoch': self.epoch, 'pos': self.pos}, 
+            protocol=pickle.HIGHEST_PROTOCOL)
+        p = np.fromstring(pklbytes, dtype=np.uint8)
+
+        # Now save params and matrices to file
         try:
             np.savez(outfile, p=p, 
-                E=self.E.get_value(), U=self.U.get_value(), W=self.W.get_value(), 
-                V=self.V.get_value(), b=self.b.get_value(), c=self.c.get_value())
+                E=self.E.get_value(), U=self.U.get_value(), 
+                W=self.W.get_value(), V=self.V.get_value(), 
+                a=self.a.get_value(), b=self.b.get_value(), c=self.c.get_value())
         except OSError as e:
             raise e
         else:
@@ -272,16 +294,15 @@ class ModelParams:
         for pos in range(len(X)):
             errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
 
-        return np.sum(errors)
+        return np.sum(errors).item()
 
     def calc_loss(self, X, Y):
-        return self.calc_total_loss(X, Y) / float(Y.size)
+        return self.calc_total_loss(X, Y) / float(X.size)
 
     def freshstate(self):
-        return np.zeros([self.layers, self.state_size], dtype=theano.config.floatX)
+        return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
-    def train(self, inputs, outputs, learnrate=0.001, decayrate=0.9,
-        num_epochs=10, num_pos=0, callback_every=10000, callback=None):
+    def train(self, inputs, outputs, num_epochs=10, num_pos=0, callback_every=10000, callback=None):
         """Train model on given inputs/outputs for given num_epochs for
         num_pos examples per cycle.
 
@@ -311,10 +332,11 @@ class ModelParams:
                 for pos in range(train_len):
                     self.pos = pos
                     # Learning step
-                    step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
+                    step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
+                        self.hyper.learnrate, self.hyper.decay)
                     # Optional callback
                     if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
-                        callback(self, self.epoch, self.pos)
+                        callback(self)
                 self.epoch += 1
         else:
             step_state = self.freshstate()
@@ -324,10 +346,11 @@ class ModelParams:
             # Loop over training data
             for pos in range(start_pos, end_pos):
                 # Learning step
-                step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
+                step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
+                    self.hyper.learnrate, self.hyper.decay)
                 # Optional callback
                 if callback and callback_every and (pos - start_pos) % callback_every == 0:
-                    callback(self, self.epoch, self.pos)
+                    callback(self)
                 self.pos = pos + 1
 
     def genchars(self, charset, numchars, init_state=None):
@@ -380,8 +403,10 @@ class ModelParams:
         # We *do*, however, return the final updated state
         return "".join(chars), next_state
 
+    # TODO: Non-Theano step function
+    # TODO: Non-Theano char generator
 
-    def traintime(self, inputvec, outputvec, init_state=None, learnrate=0.001, decayrate=0.9):
+    def traintime(self, inputvec, outputvec, init_state=None):
         """Prints time for single training step.
         Input should be single-dim vector.
         """
@@ -390,7 +415,7 @@ class ModelParams:
 
         # Time training step
         time1 = time.time()
-        self.train_step(inputvec, outputvec, start_state, learnrate, decayrate)
+        self.train_step(inputvec, outputvec, start_state, self.hyper.learnrate, self.hyper.decay)
         time2 = time.time()
 
         stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
@@ -560,7 +585,7 @@ class Checkpoint:
         self.loss = loss
 
     @classmethod
-    def createcheckpoint(cls, savedir, datafile, modelparams, epoch, pos, loss):
+    def createcheckpoint(cls, savedir, datafile, modelparams, loss):
         """Creates and saves modelparams and pickled training checkpoint into savedir.
         Returns new checkpoint and filename if successful, or (None, None) otherwise.
         """
@@ -584,7 +609,7 @@ class Checkpoint:
             stderr.write("Saved model parameters to {0}\n".format(modelfilename))
 
             # Create checkpoint
-            cp = cls(datafile, modelfilename, modeldatetime, epoch, pos, loss)
+            cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss)
             cpfilename = os.path.join(savedir, basefilename + ".p")
 
             # Save checkpoint
@@ -612,12 +637,12 @@ class Checkpoint:
             return None
         else:
             try:
+                stderr.write("Restoring checkpoint from file {0}...\n".format(cpfile))
                 cp = pickle.load(f)
             except Exception as e:
                 stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cpfile, e))
                 return None
             else:
-                stderr.write("Restored checkpoint from file {0}\n".format(cpfile))
                 return cp
         finally:
             f.close()
@@ -649,9 +674,8 @@ class ModelState:
     but dataset and model parameters must be explicitly (re)loaded.
     """
 
-    def __init__(self, hyper, chars, curdir, srcinfo=None, cpfile=None, 
+    def __init__(self, chars, curdir, srcinfo=None, cpfile=None, 
         cp=None, datafile=None, data=None, modelfile=None, model=None):
-        self.hyper = hyper
         self.chars = chars
         self.srcinfo = srcinfo
         self.curdir = curdir
@@ -684,7 +708,7 @@ class ModelState:
                 self.cpfile = None
 
     @classmethod
-    def initfromsrcfile(cls, srcfile, usedir, *, init_checkpoint=True, **kwargs):
+    def initfromsrcfile(cls, srcfile, usedir, *, seq_len=100, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
         Creates initial checkpoint after model creation if init_checkpoint is True.
         Additional keyword arguments are passed to HyperParams.
@@ -717,24 +741,25 @@ class ModelState:
         charset = CharSet(set(datastr), srcinfo=(basename + "-chars"))
 
         # And set hyperparameters (additional keyword args passed through)
-        hyperparams = HyperParams(**kwargs)
+        hyperparams = HyperParams(charset.vocab_size, **kwargs)
 
         # Create dataset, and save
-        dataset = DataSet(datastr, charset, seq_len=hyperparams.seq_len, srcinfo=(basename + "-data"))
+        dataset = DataSet(datastr, charset, seq_len=seq_len, srcinfo=(basename + "-data"))
         datafilename = dataset.savetofile(dirname)
 
         # Now we can initialize the state
-        modelstate = cls(hyperparams, charset, dirname, srcinfo=(basename + "-state"), 
+        modelstate = cls(charset, dirname, srcinfo=(basename + "-state"), 
             datafile=datafilename, data=dataset)
 
         # And build the model, with optional checkpoint
         if init_checkpoint:
-            modelstate.buildmodelparams(dirname)
+            modelstate.buildmodelparams(hyperparams, dirname)
         else:
-            modelstate.buildmodelparams()
+            modelstate.buildmodelparams(hyperparams)
 
         # Save initial model state
-        modelstate.savetofile(dirname)
+        #modelstate.savetofile(dirname)
+        # Already saved during buildmodelparams()
 
         return modelstate
 
@@ -915,8 +940,7 @@ class ModelState:
         usedir = savedir if savedir else self.curdir
 
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, 
-            self.model.epoch, self.model.pos, loss)
+        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, loss)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
@@ -930,11 +954,11 @@ class ModelState:
         else:
             return False
 
-    def builddataset(self, datastr, srcinfo=None):
+    def builddataset(self, datastr, seq_len=100, srcinfo=None):
         """Builds new dataset from string and saves to file in working directory."""
 
         # Build dataset from string
-        self.data = DataSet(datastr, self.chars, self.hyper.seq_len, srcinfo)
+        self.data = DataSet(datastr, self.chars, seq_len, srcinfo)
 
         # Save to file in working directory
         self.datafile = self.data.savetofile(self.curdir)
@@ -945,18 +969,60 @@ class ModelState:
         else:
             return False
 
-    def buildmodelparams(self, checkpointdir=None):
-        """Builds model parameters from current hyperparameters and charset size.
+    def buildmodelparams(self, hyper, checkpointdir=None):
+        """Builds model parameters from given hyperparameters and charset size.
         Optionally saves checkpoint immediately after building if path specified.
         """
 
-        self.model = ModelParams(self.hyper.state_size, self.chars.vocab_size, 
-            self.hyper.layers, self.hyper.bptt_truncate)
+        self.model = ModelParams(hyper)
 
         if checkpointdir:
-            self.newcheckpoint(checkpointdir, 0, 0, 0)
+            # Get initial loss estimate
+            stderr.write("Calculating initial loss estimate...\n")
+            loss_len = 1000 if len(self.data.x_array) >= 1000 else len(self.data.x_array)
+            loss = self.model.calc_loss(self.data.x_array[:loss_len], self.data.y_array[:loss_len])
+            stderr.write("Initial loss: {0:.3f}\n".format(loss))
 
-    #def trainmodel
+            # Take checkpoint
+            self.newcheckpoint(loss, savedir=checkpointdir)
+
+    def trainmodel(self, num_rounds=1, round_epochs=1, print_every=1000):
+        """Train loaded model for num_rounds of round_epochs passes, printing
+        progress every print_every examples, calculating loss and creating 
+        a checkpoint after each round.
+        """
+
+        # Make sure we have model and data loaded
+        if not self.data or not self.model:
+            stderr.write("Dataset and model parameters must be loaded before training!\n")
+            return False
+
+        # Progress callback
+        progress = printprogress(self.chars)
+
+        # Train for num_rounds
+        for roundnum in range(num_rounds):
+            # Train for round_epochs...
+            self.model.train(
+                self.data.x_array, 
+                self.data.y_array,
+                num_epochs=round_epochs,
+                callback=progress,
+                callback_every=print_every)
+
+            # Calc loss
+            loss = self.model.calc_loss(self.data.x_array, self.data.y_array)
+
+            # Adjust learning rate if necessary
+            if loss > self.cp.loss:
+                self.model.hyper.learnrate *= 0.5
+
+            # Take checkpoint
+            self.newcheckpoint(loss)
+            self.cp.printstats(stdout)
+
+        stdout.write("Completed {0:d} rounds of {1:d} epochs each.\n".format(num_rounds, round_epochs))
+
 
 # Unattached functions
 
@@ -969,3 +1035,6 @@ def printprogress(charset):
         genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
     return retfunc
+
+# TODO: Non-Theano sigmoid
+# TODO: Non-Theano softmax
