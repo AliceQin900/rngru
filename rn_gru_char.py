@@ -18,6 +18,8 @@ class HyperParams:
         self.decay = decay
 
 
+# TODO: add dropout between layers, *proper* embedding layer hooks
+# TODO: make scaffolding for context windows (might need to involve charset)
 class ModelParams:
     """Model parameter matrices for GRU setup.
     E is embedding layer, translating from integer input x to state-sized column vector.
@@ -25,8 +27,7 @@ class ModelParams:
     V translates back to vocab-sized vector for output.
     """
 
-    def __init__(self, hyper, epoch=0, pos=0,
-        E=None, U=None, W=None, V=None, a=None, b=None, c=None):
+    def __init__(self, hyper, epoch=0, pos=0, U=None, W=None, V=None, b=None, c=None):
 
         self.hyper = hyper
         self.epoch = epoch
@@ -36,13 +37,9 @@ class ModelParams:
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
         # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
-        tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (hyper.state_size, hyper.vocab_size))
-
         tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.layers*3, hyper.state_size, hyper.state_size))
+            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
+            (hyper.layers*3, hyper.state_size, hyper.vocab_size))
 
         tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
@@ -50,31 +47,24 @@ class ModelParams:
 
         tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.vocab_size, hyper.state_size))
+            (hyper.layers, hyper.vocab_size, hyper.state_size))
 
         # Initialize bias matrices to zeroes
-        # b gets 3x2D per layer, a and c are single 2D
-        # a is initalized randomly, b and c are zeros
-        ta = np.copy(a) if isinstance(a, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), hyper.vocab_size)
+        # b gets 3x2D per layer, c is single 2D
         tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
-        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
+        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros((hyper.layers, hyper.vocab_size))
 
         # Shared variables
-        self.E = theano.shared(name='E', value=tE.astype(theano.config.floatX))
         self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
         self.W = theano.shared(name='W', value=tW.astype(theano.config.floatX))
         self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
-        self.a = theano.shared(name='a', value=ta.astype(theano.config.floatX))
         self.b = theano.shared(name='b', value=tb.astype(theano.config.floatX))
         self.c = theano.shared(name='c', value=tc.astype(theano.config.floatX))
 
         # rmsprop parameters
-        self.mE = theano.shared(name='mE', value=np.zeros_like(tE).astype(theano.config.floatX))
         self.mU = theano.shared(name='mU', value=np.zeros_like(tU).astype(theano.config.floatX))
         self.mW = theano.shared(name='mW', value=np.zeros_like(tW).astype(theano.config.floatX))
         self.mV = theano.shared(name='mV', value=np.zeros_like(tV).astype(theano.config.floatX))
-        self.ma = theano.shared(name='ma', value=np.zeros_like(ta).astype(theano.config.floatX))
         self.mb = theano.shared(name='mb', value=np.zeros_like(tb).astype(theano.config.floatX))
         self.mc = theano.shared(name='mc', value=np.zeros_like(tc).astype(theano.config.floatX))
 
@@ -102,7 +92,7 @@ class ModelParams:
         state_size = self.hyper.state_size
 
         # Local bindings for convenience
-        E, U, W, V, a, b, c = self.E, self.U, self.W, self.V, self.a, self.b, self.c
+        U, W, V, b, c = self.U, self.W, self.V, self.b, self.c
 
         # Forward propagation
         def forward_step(x_t, s_t):
@@ -111,26 +101,10 @@ class ModelParams:
             # Initialize state to return
             s_next = T.zeros_like(s_t)
 
-            # Input to first layer (taking shortcut by getting column of E)
-            # ((Equivalent to multiplying E by x_t as one-hot vector))
-            #inout = E[:,x_t]
-
             # Not taking shortcut anymore
-
             # Create one-hot vector from x_t using column of xI
             xI = T.eye(vocab_size, vocab_size)
-            x_vec = xI[:,x_t]
-
-            # First input to layer(s) goes through E
-            # Basically a is a bias vector against x_vec, so E can be 
-            # dotted against more than a one-hot vector
-            # (Otherwise, E is basically bypassed value-wise)
-            # Later we may do a character/word embedding layer, and go 
-            # back to just dotting E and x_vec
-
-            # Theano softmax returns one-row matrix, return just row
-            # (Will have to be changed once batching implemented)
-            inout = T.nnet.softmax(E.dot(x_vec + a))[0]
+            inout = xI[:,x_t]
 
             # Loop over layers
             for layer in range(layers):
@@ -148,10 +122,11 @@ class ModelParams:
                 s_new = (T.ones_like(z) - z) * h + z * s_prev
                 s_next = T.set_subtensor(s_next[layer], s_new)
                 # Update for next layer or final output (might add dropout here later)
-                inout = s_new
+                inout = V[layer].dot(s_new) + c[layer]
 
             # Final output
-            o_t = T.nnet.softmax(V.dot(inout) + c)[0]
+            # Theano's softmax returns matrix, and we just want the column
+            o_t = T.nnet.softmax(inout)[0]
             return o_t, s_next
 
         # Now get Theano to do the heavy lifting
@@ -165,8 +140,6 @@ class ModelParams:
         cost = o_err
 
         # Gradients
-        dE = T.grad(cost, E)
-        da = T.grad(cost, a)
         dU = T.grad(cost, U)
         dW = T.grad(cost, W)
         db = T.grad(cost, b)
@@ -176,8 +149,6 @@ class ModelParams:
         # rmsprop parameter updates
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
-        mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
-        ma = decayrate * self.ma + (1 - decayrate) * da ** 2
         mU = decayrate * self.mU + (1 - decayrate) * dU ** 2
         mW = decayrate * self.mW + (1 - decayrate) * dW ** 2
         mb = decayrate * self.mb + (1 - decayrate) * db ** 2
@@ -190,22 +161,18 @@ class ModelParams:
         self.err = theano.function([x, y, s_in], [cost, s_out])
         # Backpropagation
         # We'll use this at some point for gradient checking
-        self.bptt = theano.function([x, y, s_in], [dE, da, dU, dW, db, dV, dc])
+        self.bptt = theano.function([x, y, s_in], [dU, dW, db, dV, dc])
 
         # Training step function
         self.train_step = theano.function(
             [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
             s_out,
             updates=[
-                (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
-                (a, a - learnrate * da / T.sqrt(ma + 1e-6)),
                 (U, U - learnrate * dU / T.sqrt(mU + 1e-6)),
                 (W, W - learnrate * dW / T.sqrt(mW + 1e-6)),
                 (b, b - learnrate * db / T.sqrt(mb + 1e-6)),
                 (V, V - learnrate * dV / T.sqrt(mV + 1e-6)),
                 (c, c - learnrate * dc / T.sqrt(mc + 1e-6)),
-                (self.mE, mE),
-                (self.ma, ma),
                 (self.mU, mU),
                 (self.mW, mW),
                 (self.mb, mb),
@@ -223,8 +190,9 @@ class ModelParams:
         x_in = T.iscalar('x_in')
         k = T.iscalar('k')
         rng = T.shared_randomstreams.RandomStreams(seed=int(
-            self.E.get_value()[0,0] + self.U.get_value()[0,0,0] + 
-            self.W.get_value()[0,0,0] + self.V.get_value()[0,0]))
+            self.U.get_value()[0,0,0] + 
+            self.W.get_value()[0,0,0] + 
+            self.V.get_value()[0,0,0]))
 
         def generate_step(x_t, s_t):
             # Do next step
@@ -258,14 +226,14 @@ class ModelParams:
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
-            p, E, U, W, V, a, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
+            p, U, W, V, b, c = f['p'], f['U'], f['W'], f['V'], f['b'], f['c']
 
             # Extract hyperparams and position
             params = pickle.loads(p.tobytes())
             hyper, epoch, pos = params['hyper'], params['epoch'], params['pos']
 
             # Create instance
-            model = cls(hyper, epoch, pos, E=E, U=U, W=W, V=V, a=a, b=b, c=c)
+            model = cls(hyper, epoch, pos, U=U, W=W, V=V, b=b, c=c)
             if isinstance(infile, str):
                 stderr.write("Loaded model parameters from {0}\n".format(infile))
 
@@ -280,9 +248,11 @@ class ModelParams:
         # Now save params and matrices to file
         try:
             np.savez(outfile, p=p, 
-                E=self.E.get_value(), U=self.U.get_value(), 
-                W=self.W.get_value(), V=self.V.get_value(), 
-                a=self.a.get_value(), b=self.b.get_value(), c=self.c.get_value())
+                U=self.U.get_value(), 
+                W=self.W.get_value(), 
+                V=self.V.get_value(), 
+                b=self.b.get_value(), 
+                c=self.c.get_value())
         except OSError as e:
             raise e
         else:
