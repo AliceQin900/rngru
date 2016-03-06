@@ -956,6 +956,8 @@ class ModelState:
         if checkpointdir:
             self.newcheckpoint(checkpointdir, 0, 0, 0)
 
+    #def trainmodel
+
 # Unattached functions
 
 def printprogress(charset):
