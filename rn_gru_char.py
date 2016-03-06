@@ -25,16 +25,19 @@ class ModelParams:
     V translates back to vocab-sized vector for output.
     """
 
-    def __init__(self, state_size, vocab_size, layers=1, bptt_truncate=-1, 
+    def __init__(self, state_size, vocab_size, layers=1, bptt_truncate=-1, epoch=0, pos=0,
         E=None, U=None, W=None, V=None, b=None, c=None):
         self.state_size = state_size
         self.vocab_size = vocab_size
         self.layers = layers
         self.bptt_truncate = bptt_truncate
+        self.epoch = epoch
+        self.pos = pos
 
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
+        # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
         tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/vocab_size), np.sqrt(1.0/vocab_size), (state_size, vocab_size))
 
@@ -95,6 +98,8 @@ class ModelParams:
         # Local bindings for convenience
         E, U, W, V, b, c = self.E, self.U, self.W, self.V, self.b, self.c
 
+        x_iden = T.eye(vocab_size, vocab_size)
+
         # Forward propagation
         def forward_step(x_t, s_t):
             """Input vector x(t) and state matrix s(t)."""
@@ -104,7 +109,13 @@ class ModelParams:
 
             # Input to first layer (taking shortcut by getting column of E)
             # ((Equivalent to multiplying E by x_t as one-hot vector))
-            inout = E[:,x_t]
+            #inout = E[:,x_t]
+
+            # Create one-hot vector from x_t using column of x_iden
+            x_vec = x_iden[:,x_t]
+
+            # Not taking shortcut anymore - model wasn't learning E
+            inout = E.dot(x_vec)
 
             # Loop over layers
             for layer in range(layers):
@@ -160,10 +171,10 @@ class ModelParams:
 
         # Assign Theano-constructed functions to instance
 
-        # We'll use these at some point for gradient checking
         # Error
-        self.err = theano.function([x, y, s_in], cost)
+        self.err = theano.function([x, y, s_in], [cost, s_out])
         # Backpropagation
+        # We'll use this at some point for gradient checking
         self.bptt = theano.function([x, y, s_in], [dE, dU, dW, db, dV, dc])
 
         # Training step function
@@ -188,8 +199,8 @@ class ModelParams:
         # Predicted char probabilities (old version, reqires recursive sequence input)
         self.predict_prob = theano.function([x, s_in], [o, s_out])
         # Predicted most-likely next char
-        predict = T.argmax(o, axis=1)
-        self.predict_max = theano.function([x, s_in], [predict, s_out])
+        #predict = T.argmax(o, axis=1)
+        #self.predict_max = theano.function([x, s_in], [predict, s_out])
 
         # Generate output sequence based on input char index and state (new version)
         x_in = T.iscalar('x_in')
@@ -232,18 +243,18 @@ class ModelParams:
             # Load matrices
             p, E, U, W, V, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['b'], f['c']
 
-            # Extract hyperparams
-            state_size, vocab_size, layers, bptt_truncate = p[0], p[1], p[2], p[3]
+            # Extract hyperparams and position
+            state_size, vocab_size, layers, bptt_truncate, epoch, pos = p[0], p[1], p[2], p[3], p[4], p[5]
 
             # Create instance
-            model = cls(state_size, vocab_size, layers, bptt_truncate, E=E, U=U, W=W, V=V, b=b, c=c)
+            model = cls(state_size, vocab_size, layers, bptt_truncate, epoch, pos, E=E, U=U, W=W, V=V, b=b, c=c)
             if isinstance(infile, str):
                 stderr.write("Loaded model parameters from {0}\n".format(infile))
 
             return model
 
     def savetofile(self, outfile):
-        p = np.array([self.state_size, self.vocab_size, self.layers, self.bptt_truncate])
+        p = np.array([self.state_size, self.vocab_size, self.layers, self.bptt_truncate, self.epoch, self.pos])
         try:
             np.savez(outfile, p=p, 
                 E=self.E.get_value(), U=self.U.get_value(), W=self.W.get_value(), 
@@ -255,7 +266,13 @@ class ModelParams:
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
 
     def calc_total_loss(self, X, Y):
-        return np.sum([self.err(x, y, self.freshstate()) for x, y in zip(X, Y)])
+        step_state = self.freshstate()
+        errors = np.zeros(len(X))
+
+        for pos in range(len(X)):
+            errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
+
+        return np.sum(errors)
 
     def calc_loss(self, X, Y):
         return self.calc_total_loss(X, Y) / float(Y.size)
@@ -265,39 +282,53 @@ class ModelParams:
 
     def train(self, inputs, outputs, learnrate=0.001, decayrate=0.9,
         num_epochs=10, num_pos=0, callback_every=10000, callback=None):
-        """Train model on given inputs/outputs for given num_epochs.
+        """Train model on given inputs/outputs for given num_epochs for
+        num_pos examples per cycle.
+
         Optional callback function called after callback_every, with 
-        model, epoch, and pos as arguments.
+        model as argument.
+
         Inputs and outputs assumed to be numpy arrays (or equivalent)
         of 2 dimensions.
-        If num_epochs is 0, will only train on num_pos examples.
+
+        If num_epochs is 0, will only train on num_pos examples, starting
+        from last pos.
+
+        If num_epochs is > 0, will train on num_pos examples per epoch, 
+        or full input length if num_pos is 0.
         """
         # Use explicit indexing so we can keep track, both for
         # checkpoint purposes, and to check against callback_every
         input_len = inputs.shape[0]
 
         if num_epochs:
-            # Each epoch is a full pass through the training set
+            train_len = num_pos if num_pos > 0 else input_len
+
             for epoch in range(num_epochs):
                 # Fresh state
                 step_state = self.freshstate()
                 # Loop over training data
-                for pos in range(input_len):
+                for pos in range(train_len):
+                    self.pos = pos
                     # Learning step
                     step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
                     # Optional callback
                     if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
-                        callback(self, epoch, pos)
+                        callback(self, self.epoch, self.pos)
+                self.epoch += 1
         else:
             step_state = self.freshstate()
+            start_pos = self.pos
+            end_pos = start_pos + num_pos if (start_pos +  num_pos) <= input_len else input_len
+
             # Loop over training data
-            for pos in range(num_pos):
+            for pos in range(start_pos, end_pos):
                 # Learning step
                 step_state = self.train_step(inputs[pos], outputs[pos], step_state, learnrate, decayrate)
                 # Optional callback
-                if callback and callback_every and pos % callback_every == 0:
-                    callback(self, 0, pos)
-
+                if callback and callback_every and (pos - start_pos) % callback_every == 0:
+                    callback(self, self.epoch, self.pos)
+                self.pos = pos + 1
 
     def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
@@ -329,20 +360,19 @@ class ModelParams:
         # Choose the probabilistic version or the most-likely one
         # Note: we don't feed in the updated state, because predict_prob looks at
         # the whole sequence we feed (back) in
-        if choose_max:
-            for _ in range(numchars):
+        for _ in range(numchars):
+            # Get probability vector of next char
+            next_probs, next_state = self.predict_prob(idxs, prev_state)
+
+            if choose_max:
                 # Get most-likely next char
-                next_chars, next_state = self.predict_max(idxs, prev_state)
-                # Append to list, and round we go
-                idxs.append(next_chars[-1])
-        else:
-            for _ in range(numchars):
-                # Get probability vector of next char
-                next_probs, next_state = self.predict_prob(idxs, prev_state)
+                next_idx = np.argmax(next_probs[-1])
+            else:
                 # Choose char from weighted random choice
                 next_idx = np.random.choice(charset.vocab_size, p=next_probs[-1])
-                # Append to list, and round we go
-                idxs.append(next_idx)
+
+            # Append to list, and round we go
+            idxs.append(next_idx)
 
         # Now translate from indicies to characters, and construct string
         chars = [ charset.charatidx(i) for i in idxs ]
@@ -358,11 +388,20 @@ class ModelParams:
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
+        # Time training step
         time1 = time.time()
         self.train_step(inputvec, outputvec, start_state, learnrate, decayrate)
         time2 = time.time()
 
         stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
+            len(inputvec), (time2 - time1) * 1000.0))
+
+        # Time loss calc
+        time1 = time.time()
+        self.err(inputvec, outputvec, start_state)
+        time2 = time.time()
+
+        stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             len(inputvec), (time2 - time1) * 1000.0))
 
 
@@ -859,7 +898,7 @@ class ModelState:
         else:
             return False
 
-    def newcheckpoint(self, epoch, pos, loss, savedir=None):
+    def newcheckpoint(self, loss, savedir=None):
         """Creates new checkpoint with current datafile and model params.
         Defaults to saving into current working directory.
         """
@@ -876,7 +915,8 @@ class ModelState:
         usedir = savedir if savedir else self.curdir
 
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, epoch, pos, loss)
+        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, 
+            self.model.epoch, self.model.pos, loss)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
@@ -919,10 +959,10 @@ class ModelState:
 # Unattached functions
 
 def printprogress(charset):
-    def retfunc (model, epoch, pos):
+    def retfunc (model):
         print("--------\n")
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
-        print("Epoch: {0}, pos: {1}".format(epoch, pos))
+        print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
         genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
