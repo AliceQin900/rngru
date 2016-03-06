@@ -125,6 +125,8 @@ class ModelParams:
             # Basically a is a bias vector against x_vec, so E can be 
             # dotted against more than a one-hot vector
             # (Otherwise, E is basically bypassed value-wise)
+            # Later we may do a character/word embedding layer, and go 
+            # back to just dotting E and x_vec
 
             # Theano softmax returns one-row matrix, return just row
             # (Will have to be changed once batching implemented)
