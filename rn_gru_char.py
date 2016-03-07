@@ -1535,7 +1535,7 @@ class ModelState:
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 self.model.hyper.learnrate *= 0.5
-                stderr.write("Loss increased, adjusted learning rate to {0:.3f}\n".format(self.model.hyper.learnrate))
+                stderr.write("Loss increased, adjusted learning rate to {0:f}\n".format(self.model.hyper.learnrate))
 
             stderr.write("\n--------\n\n")
 
