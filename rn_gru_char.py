@@ -126,7 +126,9 @@ class ModelParams:
             # Final output
             # Theano's softmax returns matrix, and we just want the column
             o_t = T.nnet.softmax(inout)[0]
-            return o_t, s_next
+            norm = T.sum(o_t)
+            o_norm = o_t / norm
+            return o_norm, s_next
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], updates = theano.scan(
@@ -205,8 +207,6 @@ class ModelParams:
             o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
             # Now find selected index
             o_idx = T.argmax(o_rand).astype('int32')
-            norm = T.sum(o_idx)
-            o_norm = o_idx / norm
 
             # Return most likely next index
             #o_idx = T.argmax(o_t1).astype('int32')
@@ -985,12 +985,14 @@ class ModelState:
 
             # Calc loss
             loss = self.model.calc_loss(self.data.x_array, self.data.y_array)
+            stderr.write("Previous loss: {0:.3f}, current loss: {1:.3f}\n".format(self.cp.loss, loss))
 
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 self.model.hyper.learnrate *= 0.5
+                stderr.write("Loss increased, adjusted learning rate to {0:.3f}".format(self.model.hyper.learnrate))
 
-            # Take checkpoint
+            # Take checkpoint and print stats
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
 
