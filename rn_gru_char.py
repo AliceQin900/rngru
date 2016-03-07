@@ -36,75 +36,76 @@ class ModelParams():
     def savetofile(self, *args, **kwargs):
         pass
 
-    def calc_total_loss(self, X, Y):
-        step_state = self.freshstate()
+    def calc_loss(self, X, Y, init_state=None):
+        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
         errors = np.zeros(len(X))
 
+        # Use explicit indexing so a) we can feed the state back in, 
+        # and b) more efficiently store returned errors
         for pos in range(len(X)):
             errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
 
-        return np.sum(errors).item()
+        return np.sum(errors).item() / float(X.size)
 
-    def calc_loss(self, X, Y):
-        return self.calc_total_loss(X, Y) / float(X.size)
-
-    def train(self, inputs, outputs, num_epochs=1, num_pos=0, callback_every=1000, callback=None):
-        """Train model on given inputs/outputs for given num_epochs for
-        num_pos examples per cycle.
+    def train(self, inputs, outputs, num_examples=0, callback_every=1000, callback=None, init_state=None):
+        """Train model on given inputs/outputs for num_examples.
 
         Optional callback function called after callback_every, with 
-        model as argument.
+        model and current state as arguments.
 
         Inputs and outputs assumed to be numpy arrays (or equivalent)
         of 2 dimensions.
 
-        If num_epochs is 0, will only train on num_pos examples, starting
-        from last pos.
-
-        If num_epochs is > 0, will train on num_pos examples per epoch, 
-        or full input length if num_pos is 0.
+        If num_examples is 0, will train for full epoch.
         """
-        # Use explicit indexing so we can keep track, both for
-        # checkpoint purposes, and to check against callback_every
         input_len = inputs.shape[0]
+        train_len = num_examples if num_examples else input_len
 
-        if num_epochs:
-            train_len = num_pos if num_pos > 0 else input_len
+        # Start with fresh state if none provided
+        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
-            for epoch in range(num_epochs):
-                # Fresh state
-                step_state = self.freshstate()
+        # Use explicit indexing instead of fancy slicing so we can 
+        # keep track, both for model status and checkpoint purposes
+        for train_pos in range(train_len):
+            # Learning step
+            step_state = self.train_step(inputs[self.pos], outputs[self.pos], 
+                step_state, self.hyper.learnrate, self.hyper.decay)
 
-                # Loop over training data
-                for pos in range(train_len):
-                    # Learning step
-                    step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
-                        self.hyper.learnrate, self.hyper.decay)
+            # Optional callback
+            if callback and callback_every and train_pos % callback_every == 0:
+                callback(self, step_state)
 
-                    # Optional callback
-                    if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
-                        callback(self)
-
-                    self.pos = pos + 1
-
+            # Advance position and overflow
+            self.pos += 1
+            if self.pos >= input_len:
                 self.epoch += 1
                 self.pos = 0
-        else:
-            step_state = self.freshstate()
-            start_pos = self.pos
-            end_pos = start_pos + num_pos if (start_pos +  num_pos) <= input_len else input_len
 
-            # Loop over training data
-            for pos in range(start_pos, end_pos):
-                # Learning step
-                step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
-                    self.hyper.learnrate, self.hyper.decay)
+        # Return final state
+        return step_state
 
-                # Optional callback
-                if callback and callback_every and (pos - start_pos) % callback_every == 0:
-                    callback(self)
+    def traintime(self, inputvec, outputvec, init_state=None):
+        """Prints time for single training step.
+        Input should be single-dim vector.
+        """
+        # Fresh state
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
-                self.pos = pos + 1
+        # Time training step
+        time1 = time.time()
+        self.train_step(inputvec, outputvec, start_state, self.hyper.learnrate, self.hyper.decay)
+        time2 = time.time()
+
+        stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
+            len(inputvec), (time2 - time1) * 1000.0))
+
+        # Time loss calc
+        time1 = time.time()
+        self.err(inputvec, outputvec, start_state)
+        time2 = time.time()
+
+        stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
+            len(inputvec), (time2 - time1) * 1000.0))
 
     def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
@@ -158,29 +159,6 @@ class ModelParams():
 
     # TODO: Non-Theano step function
     # TODO: Non-Theano char generator
-
-    def traintime(self, inputvec, outputvec, init_state=None):
-        """Prints time for single training step.
-        Input should be single-dim vector.
-        """
-        # Fresh state
-        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
-
-        # Time training step
-        time1 = time.time()
-        self.train_step(inputvec, outputvec, start_state, self.hyper.learnrate, self.hyper.decay)
-        time2 = time.time()
-
-        stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputvec), (time2 - time1) * 1000.0))
-
-        # Time loss calc
-        time1 = time.time()
-        self.err(inputvec, outputvec, start_state)
-        time2 = time.time()
-
-        stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputvec), (time2 - time1) * 1000.0))
 
     def freshstate(self):
         pass
@@ -1505,10 +1483,16 @@ class ModelState:
             # Take checkpoint
             self.newcheckpoint(loss, savedir=checkpointdir)
 
-    def trainmodel(self, num_rounds=1, round_epochs=1, print_every=1000):
-        """Train loaded model for num_rounds of round_epochs passes, printing
-        progress every print_every examples, calculating loss and creating 
-        a checkpoint after each round.
+    def trainmodel(self, num_rounds=1, train_len=0, valid_len=0, print_every=1000):
+        """Train loaded model for num_rounds of train_len, printing
+        progress every print_every examples, calculating loss using 
+        valid_len examples, and creating a checkpoint after each round.
+
+        For train_len and valid_len, a value of 0 indicates using the
+        full dataset.
+
+        Validation is performed at the last trained position in the dataset, 
+        and training is resumed from the same point after loss is calculated.
         """
 
         # Make sure we have model and data loaded
@@ -1519,19 +1503,33 @@ class ModelState:
         # Progress callback
         progress = printprogress(self.chars)
 
+        train_for = train_len if train_len else len(self.data.x_array)
+        valid_for = valid_len if valid_len else len(self.data.x_array)
+
+        # Start with a blank state
+        train_state = self.model.freshstate()
+
         # Train for num_rounds
         for roundnum in range(num_rounds):
-            # Train for round_epochs...
-            self.model.train(
+            # Train...
+            train_state = self.model.train(
                 self.data.x_array, 
                 self.data.y_array,
-                num_epochs=round_epochs,
+                num_examples=train_for,
                 callback=progress,
-                callback_every=print_every)
+                callback_every=print_every,
+                init_state=train_state)
 
             # Calc loss
             stderr.write("--------\n\nCalculating loss...\n")
-            loss = self.model.calc_loss(self.data.x_array, self.data.y_array)
+
+            # Get wraparound slices of dataset, since calc_loss doesn't update pos
+            idxs = range(self.model.pos, self.model.pos + valid_len)
+            x_slice = self.data.x_array.take(idxs, axis=0, mode='wrap')
+            y_slice = self.data.y_array.take(idxs, axis=0, mode='wrap')
+
+            loss = self.model.calc_loss(x_slice, y_slice, train_state)
+
             stderr.write("Previous loss: {0:.3f}, current loss: {1:.3f}\n".format(self.cp.loss, loss))
 
             # Adjust learning rate if necessary
@@ -1545,18 +1543,18 @@ class ModelState:
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
 
-        stdout.write("Completed {0:d} rounds of {1:d} epochs each.\n".format(num_rounds, round_epochs))
+        stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
 
 
 # Unattached functions
 
 def printprogress(charset):
-    def retfunc (model):
+    def retfunc (model, init_state=None):
         print("--------\n")
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
         print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
-        genstr, _ = model.genchars(charset, 100)
+        genstr, _ = model.genchars(charset, 100, init_state=init_state)
         print(genstr + "\n")
     return retfunc
 
