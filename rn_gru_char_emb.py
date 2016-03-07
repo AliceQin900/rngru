@@ -37,11 +37,11 @@ class ModelParams:
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
         # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
         tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
+            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
             (hyper.state_size, hyper.vocab_size))
 
         tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
+            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (hyper.layers*3, hyper.state_size, hyper.state_size))
 
         tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
@@ -58,7 +58,7 @@ class ModelParams:
         self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
         self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
         self.W = theano.shared(name='W', value=tW.astype(theano.config.floatX))
-        self.a = theano.shared(name='b', value=ta.astype(theano.config.floatX))
+        self.a = theano.shared(name='a', value=ta.astype(theano.config.floatX))
         self.b = theano.shared(name='b', value=tb.astype(theano.config.floatX))
         self.c = theano.shared(name='c', value=tc.astype(theano.config.floatX))
 
@@ -238,7 +238,7 @@ class ModelParams:
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
-            p, U, W, V, b, c = f['p'], f['V'], f['U'], f['W'], f['a'], f['b'], f['c']
+            p, V, U, W, a, b, c = f['p'], f['V'], f['U'], f['W'], f['a'], f['b'], f['c']
 
             # Extract hyperparams and position
             params = pickle.loads(p.tobytes())
