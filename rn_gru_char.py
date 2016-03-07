@@ -117,7 +117,7 @@ class ModelParams:
                 # Reset gate
                 r = T.nnet.hard_sigmoid(U[L+1].dot(inout) + W[L+1].dot(s_prev) + b[L+1])
                 # Candidate state
-                h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(s_prev * r) + b[L+2])
+                h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(r * s_prev) + b[L+2])
                 # New state
                 s_new = (T.ones_like(z) - z) * h + z * s_prev
                 s_next = T.set_subtensor(s_next[layer], s_new)
@@ -274,7 +274,7 @@ class ModelParams:
     def freshstate(self):
         return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
-    def train(self, inputs, outputs, num_epochs=10, num_pos=0, callback_every=10000, callback=None):
+    def train(self, inputs, outputs, num_epochs=1, num_pos=0, callback_every=1000, callback=None):
         """Train model on given inputs/outputs for given num_epochs for
         num_pos examples per cycle.
 
