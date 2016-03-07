@@ -22,9 +22,8 @@ class HyperParams:
 # TODO: make scaffolding for context windows (might need to involve charset)
 class ModelParams:
     """Model parameter matrices for GRU setup.
-    E is embedding layer, translating from integer input x to state-sized column vector.
     U and W are gate matrices, 3 per layer (reset gate, update gate, state gate).
-    V translates back to vocab-sized vector for output.
+    V translates back to vocab-sized vector for output (classification layer).
     """
 
     def __init__(self, hyper, epoch=0, pos=0, U=None, W=None, V=None, b=None, c=None):
@@ -206,11 +205,13 @@ class ModelParams:
             o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
             # Now find selected index
             o_idx = T.argmax(o_rand).astype('int32')
+            norm = T.sum(o_idx)
+            o_norm = o_idx / norm
 
             # Return most likely next index
             #o_idx = T.argmax(o_t1).astype('int32')
 
-            return o_idx, s_t1
+            return o_norm, s_t1
 
         [o_chs, s_chs], genupdate = theano.scan(
             fn=generate_step,
