@@ -183,9 +183,6 @@ class ModelParams:
 
         # Predicted char probabilities (old version, reqires recursive sequence input)
         self.predict_prob = theano.function([x, s_in], [o, s_out])
-        # Predicted most-likely next char
-        #predict = T.argmax(o, axis=1)
-        #self.predict_max = theano.function([x, s_in], [predict, s_out])
 
         # Generate output sequence based on input char index and state (new version)
         x_in = T.iscalar('x_in')
@@ -199,17 +196,11 @@ class ModelParams:
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
-            # Normalize output probabilities to sum to 1
-            #norm = T.sum(o_t1)
-            #o_norm = o_t1 / norm
             # Randomly choose by multinomial distribution
-            #o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_norm)
             o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
+
             # Now find selected index
             o_idx = T.argmax(o_rand).astype('int32')
-
-            # Return most likely next index
-            #o_idx = T.argmax(o_t1).astype('int32')
 
             return o_idx, s_t1
 
@@ -326,7 +317,7 @@ class ModelParams:
                 # Learning step
                 step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
                     self.hyper.learnrate, self.hyper.decay)
-                
+
                 # Optional callback
                 if callback and callback_every and (pos - start_pos) % callback_every == 0:
                     callback(self)

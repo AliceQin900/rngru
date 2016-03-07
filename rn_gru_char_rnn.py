@@ -120,11 +120,11 @@ class ModelParams:
             # Create one-hot vector from x_t using column of xI
             x_vec = xI[:,x_t]
 
-            # Vocab-to-state
+            # Vocab-to-state RNN
             inout = T.tanh(E.dot(x_vec) + F.dot(s_t[0]) + a)
             s_next = T.set_subtensor(s_next[0], inout)
 
-            # Loop over layers
+            # Loop over GRU layers
             for layer in range(layers):
                 # 3 matrices per layer
                 L = layer * 3
@@ -213,9 +213,6 @@ class ModelParams:
 
         # Predicted char probabilities (old version, reqires recursive sequence input)
         self.predict_prob = theano.function([x, s_in], [o, s_out])
-        # Predicted most-likely next char
-        #predict = T.argmax(o, axis=1)
-        #self.predict_max = theano.function([x, s_in], [predict, s_out])
 
         # Generate output sequence based on input char index and state (new version)
         x_in = T.iscalar('x_in')
@@ -229,17 +226,11 @@ class ModelParams:
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
-            # Normalize output probabilities to sum to 1
-            #norm = T.sum(o_t1)
-            #o_norm = o_t1 / norm
             # Randomly choose by multinomial distribution
-            #o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_norm)
             o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
+
             # Now find selected index
             o_idx = T.argmax(o_rand).astype('int32')
-
-            # Return most likely next index
-            #o_idx = T.argmax(o_t1).astype('int32')
 
             return o_idx, s_t1
 
@@ -257,7 +248,7 @@ class ModelParams:
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
-            p, E, F, U, W, V, b, c = f['p'], f['E'], f['F'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
+            p, E, F, U, W, V, a, b, c = f['p'], f['E'], f['F'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
 
             # Extract hyperparams and position
             params = pickle.loads(p.tobytes())
