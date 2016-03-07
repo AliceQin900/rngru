@@ -301,16 +301,20 @@ class ModelParams:
             for epoch in range(num_epochs):
                 # Fresh state
                 step_state = self.freshstate()
+                
                 # Loop over training data
                 for pos in range(train_len):
-                    self.pos = pos
                     # Learning step
                     step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
                         self.hyper.learnrate, self.hyper.decay)
+                    self.pos = pos + 1
+
                     # Optional callback
                     if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
                         callback(self)
+
                 self.epoch += 1
+                self.pos = 0
         else:
             step_state = self.freshstate()
             start_pos = self.pos
@@ -321,10 +325,11 @@ class ModelParams:
                 # Learning step
                 step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
                     self.hyper.learnrate, self.hyper.decay)
+                self.pos = pos + 1
+
                 # Optional callback
                 if callback and callback_every and (pos - start_pos) % callback_every == 0:
                     callback(self)
-                self.pos = pos + 1
 
     def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
