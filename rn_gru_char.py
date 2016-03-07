@@ -24,7 +24,7 @@ class ModelParams():
     NOTE: Not intended to be instantiated!
     """
 
-    def __init__(self, hyper, epoch, pos):
+    def __init__(self, hyper, epoch=0, pos=0):
         self.hyper = hyper
         self.epoch = epoch
         self.pos = pos
@@ -205,8 +205,6 @@ class GRUSimple(ModelParams):
     U and W are gate matrices, 3 per layer (reset gate, update gate, state gate).
     V translates back to vocab-sized vector for output (classification layer).
     """
-
-    modeltype = 'GRUSimple'
 
     def __init__(self, hyper, epoch=0, pos=0, U=None, W=None, V=None, b=None, c=None):
         super(GRUSimple, self).__init__(hyper, epoch, pos)
@@ -441,8 +439,6 @@ class GRUEmbed(ModelParams):
     V translates from vocab-sized vector to state-sized vector for input,
     then back to vocab-sized vector for output.
     """
-
-    modeltype = 'GRUEmbed'
 
     def __init__(self, hyper, epoch=0, pos=0, V=None, U=None, W=None, a=None, b=None, c=None):
         super(GRUEmbed, self).__init__(hyper, epoch, pos)
@@ -684,8 +680,6 @@ class GRUEmbed(ModelParams):
 
 class GRURNN(ModelParams):
     """Multi-layer GRU with RNN layer in front."""
-
-    modeltype = 'GRURNN'
 
     def __init__(self, hyper, epoch=0, pos=0, E=None, F=None, U=None, W=None, V=None, a=None, b=None, c=None):
         super(GRURNN, self).__init__(hyper, epoch, pos)
@@ -1231,7 +1225,7 @@ class ModelState:
                 self.cpfile = None
 
     @classmethod
-    def initfromsrcfile(cls, srcfile, usedir, modeltype, *, seq_len=100, init_checkpoint=True, **kwargs):
+    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUSimple', *, seq_len=100, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
         Creates initial checkpoint after model creation if init_checkpoint is True.
         Additional keyword arguments are passed to HyperParams.
@@ -1257,7 +1251,8 @@ class ModelState:
 
         # Determine full path of working dir and base name of source file
         # Will be using these later on
-        dirname = os.path.abspath(usedir)
+        # dirname = os.path.abspath(usedir)
+        dirname = usedir
         basename = os.path.basename(srcfile)
 
         # Now find character set
@@ -1497,8 +1492,8 @@ class ModelState:
         """Builds model parameters from given hyperparameters and charset size.
         Optionally saves checkpoint immediately after building if path specified.
         """
-
-        self.model = ModelParams(hyper)
+        useclass = self.modeltypes[self.modeltype]
+        self.model = useclass(hyper)
 
         if checkpointdir:
             # Get initial loss estimate
