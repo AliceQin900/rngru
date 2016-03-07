@@ -92,6 +92,7 @@ class ModelParams:
 
         # Local bindings for convenience
         U, W, V, b, c = self.U, self.W, self.V, self.b, self.c
+        xI = T.eye(vocab_size, vocab_size)
 
         # Forward propagation
         def forward_step(x_t, s_t):
@@ -102,8 +103,8 @@ class ModelParams:
 
             # Not taking shortcut anymore
             # Create one-hot vector from x_t using column of xI
-            xI = T.eye(vocab_size, vocab_size)
             inout = xI[:,x_t]
+            #inout = theano.tensor.extra_ops.to_one_hot(x_t, vocab_size)
 
             # Loop over layers
             for layer in range(layers):
@@ -126,8 +127,7 @@ class ModelParams:
             # Final output
             # Theano's softmax returns matrix, and we just want the column
             o_t = T.nnet.softmax(inout)[0]
-            norm = T.sum(o_t)
-            o_norm = o_t / norm
+            o_norm = o_t / T.sum(o_t)
             return o_norm, s_next
 
         # Now get Theano to do the heavy lifting
@@ -211,7 +211,7 @@ class ModelParams:
             # Return most likely next index
             #o_idx = T.argmax(o_t1).astype('int32')
 
-            return o_norm, s_t1
+            return o_idx, s_t1
 
         [o_chs, s_chs], genupdate = theano.scan(
             fn=generate_step,
@@ -301,17 +301,18 @@ class ModelParams:
             for epoch in range(num_epochs):
                 # Fresh state
                 step_state = self.freshstate()
-                
+
                 # Loop over training data
                 for pos in range(train_len):
                     # Learning step
                     step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
                         self.hyper.learnrate, self.hyper.decay)
-                    self.pos = pos + 1
 
                     # Optional callback
                     if callback and callback_every and (epoch * input_len + pos) % callback_every == 0:
                         callback(self)
+
+                    self.pos = pos + 1
 
                 self.epoch += 1
                 self.pos = 0
@@ -325,11 +326,12 @@ class ModelParams:
                 # Learning step
                 step_state = self.train_step(inputs[pos], outputs[pos], step_state, 
                     self.hyper.learnrate, self.hyper.decay)
-                self.pos = pos + 1
-
+                
                 # Optional callback
                 if callback and callback_every and (pos - start_pos) % callback_every == 0:
                     callback(self)
+
+                self.pos = pos + 1
 
     def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
