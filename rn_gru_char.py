@@ -166,23 +166,22 @@ class GRUSimple(ModelParams):
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
-        tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
+        tU = U if isinstance(U, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
             (hyper.layers*3, hyper.state_size, hyper.vocab_size))
 
-        tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
+        tW = W if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (hyper.layers*3, hyper.state_size, hyper.state_size))
 
-        tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
+        tV = V if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (hyper.layers, hyper.vocab_size, hyper.state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
-        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros((hyper.layers, hyper.vocab_size))
+        tb = b if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
+        tc = c if isinstance(c, np.ndarray) else np.zeros((hyper.layers, hyper.vocab_size))
 
         # Shared variables
         self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
@@ -416,24 +415,23 @@ class GRUDecode(ModelParams):
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
-        tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
+        tV = V if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
             (hyper.state_size, hyper.vocab_size))
 
-        tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
+        tU = U if isinstance(U, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (hyper.layers*3, hyper.state_size, hyper.state_size))
 
-        tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
+        tW = W if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (hyper.layers*3, hyper.state_size, hyper.state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        ta = np.copy(a) if isinstance(a, np.ndarray) else np.zeros(hyper.state_size)
-        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
-        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
+        ta = a if isinstance(a, np.ndarray) else np.zeros(hyper.state_size)
+        tb = b if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
+        tc = c if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
         # Shared variables
         self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
@@ -682,32 +680,31 @@ class GRUResize(ModelParams):
         # Randomly initialize matrices if not provided
         # E, F, U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
-        tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
+        tE = E if isinstance(E, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
             (3, hyper.state_size, hyper.vocab_size))
 
-        tF = np.copy(F) if isinstance(F, np.ndarray) else np.random.uniform(
+        tF = F if isinstance(F, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             (3, hyper.state_size, hyper.state_size))
 
-        tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
+        tU = U if isinstance(U, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
 
-        tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
+        tW = W if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
             ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
 
-        tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
+        tV = V if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
             (hyper.vocab_size, hyper.state_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        ta = np.copy(a) if isinstance(a, np.ndarray) else np.zeros((3, hyper.state_size))
-        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros(((hyper.layers-1)*3, hyper.state_size))
-        tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
+        ta = a if isinstance(a, np.ndarray) else np.zeros((3, hyper.state_size))
+        tb = b if isinstance(b, np.ndarray) else np.zeros(((hyper.layers-1)*3, hyper.state_size))
+        tc = c if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
         # Shared variables
         self.E = theano.shared(name='E', value=tE.astype(theano.config.floatX))
