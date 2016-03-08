@@ -107,7 +107,7 @@ class ModelParams():
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             len(inputvec), (time2 - time1) * 1000.0))
 
-    def genchars(self, charset, numchars, init_state=None):
+    def genchars(self, charset, numchars, init_state=None, use_max=False):
         """Generate string of characters from current model parameters."""
 
         # Fresh state
@@ -117,7 +117,10 @@ class ModelParams():
         seedch = charset.randomidx()
 
         # Get generated sequence
-        idxs, end_state = self.gen_chars(numchars, seedch, start_state)
+        if use_max:
+            idxs, end_state = self.gen_chars_max(numchars, seedch, start_state)
+        else:
+            idxs, end_state = self.gen_chars(numchars, seedch, start_state)
 
         # Now translate from indicies to characters, and construct string
         chars = [ charset.charatidx(i) for i in idxs ]
@@ -135,7 +138,13 @@ class ModelParams():
     def err(self, *args, **kwargs):
         pass
 
+    def grad(self, *args, **kwargs):
+        pass
+
     def gen_chars(self, *args, **kwargs):
+        pass
+
+    def gen_chars_max(self, *args, **kwargs):
         pass
 
     def predict_prob(self, *args, **kwargs):
@@ -282,9 +291,9 @@ class GRUSimple(ModelParams):
 
         # Error
         self.err = theano.function([x, y, s_in], [cost, s_out])
-        # Backpropagation
+        # Gradients
         # We'll use this at some point for gradient checking
-        self.bptt = theano.function([x, y, s_in], [dU, dW, db, dV, dc])
+        self.grad = theano.function([x, y, s_in], [dU, dW, db, dV, dc])
 
         # Training step function
         self.train_step = theano.function(
@@ -314,6 +323,7 @@ class GRUSimple(ModelParams):
             self.W.get_value()[0,0,0] + 
             self.V.get_value()[0,0,0]))
 
+        # Sequence generation, probabilistic version
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
@@ -331,11 +341,26 @@ class GRUSimple(ModelParams):
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             n_steps=k)
         s_ch = s_chs[-1]
-
         self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
 
+        # Sequence generation, most-likely (argmax) version
+        def generate_step_max(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Now find selected index
+            o_idx = T.argmax(o_t1).astype('int32')
+
+            return o_idx, s_t1
+
+        [o_chsm, s_chsm], genupdatemax = theano.scan(
+            fn=generate_step_max,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_chm = s_chsm[-1]
+        self.gen_chars_max = theano.function([k, x_in, s_in], [o_chsm, s_chm], name='gen_chars_max')
+
         # Whew, I think we're done!
-        # (Loss functions further down)
 
     @classmethod
     def loadfromfile(cls, infile):
@@ -525,9 +550,9 @@ class GRUEmbed(ModelParams):
 
         # Error
         self.err = theano.function([x, y, s_in], [cost, s_out])
-        # Backpropagation
+        # Gradients
         # We'll use this at some point for gradient checking
-        self.bptt = theano.function([x, y, s_in], [dV, dU, dW, da, db, dc])
+        self.grad = theano.function([x, y, s_in], [dV, dU, dW, da, db, dc])
 
         # Training step function
         self.train_step = theano.function(
@@ -559,6 +584,7 @@ class GRUEmbed(ModelParams):
             self.U.get_value()[0,0,0] + 
             self.W.get_value()[0,0,0])) 
 
+        # Sequence generation, probabilistic version
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
@@ -577,6 +603,23 @@ class GRUEmbed(ModelParams):
             n_steps=k)
         s_ch = s_chs[-1]
         self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
+
+        # Sequence generation, most-likely (argmax) version
+        def generate_step_max(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Now find selected index
+            o_idx = T.argmax(o_t1).astype('int32')
+
+            return o_idx, s_t1
+
+        [o_chsm, s_chsm], genupdatemax = theano.scan(
+            fn=generate_step_max,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_chm = s_chsm[-1]
+        self.gen_chars_max = theano.function([k, x_in, s_in], [o_chsm, s_chm], name='gen_chars_max')
 
         # Whew, I think we're done!
         # (Loss functions further down)
@@ -781,9 +824,9 @@ class GRURNN(ModelParams):
 
         # Error
         self.err = theano.function([x, y, s_in], [cost, s_out])
-        # Backpropagation
+        # Gradients
         # We'll use this at some point for gradient checking
-        self.bptt = theano.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
+        self.grad = theano.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
 
         # Training step function
         self.train_step = theano.function(
@@ -819,6 +862,7 @@ class GRURNN(ModelParams):
             self.U.get_value()[0,0,0] + 
             self.W.get_value()[0,0,0])) 
 
+        # Sequence generation, probabilistic version
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
@@ -838,8 +882,25 @@ class GRURNN(ModelParams):
         s_ch = s_chs[-1]
         self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
 
+        # Sequence generation, most-likely (argmax) version
+        def generate_step_max(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Now find selected index
+            o_idx = T.argmax(o_t1).astype('int32')
+
+            return o_idx, s_t1
+
+        [o_chsm, s_chsm], genupdatemax = theano.scan(
+            fn=generate_step_max,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_chm = s_chsm[-1]
+        self.gen_chars_max = theano.function([k, x_in, s_in], [o_chsm, s_chm], name='gen_chars_max')
+
+
         # Whew, I think we're done!
-        # (Loss functions further down)
 
     @classmethod
     def loadfromfile(cls, infile):
@@ -1497,12 +1558,13 @@ class ModelState:
 
             loss = self.model.calc_loss(x_slice, y_slice, train_state)
 
-            stderr.write("Previous loss: {0:.3f}, current loss: {1:.3f}\n".format(self.cp.loss, loss))
+            stderr.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
 
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
-                self.model.hyper.learnrate *= 0.5
-                stderr.write("Loss increased, adjusted learning rate to {0:.6f}\n".format(self.model.hyper.learnrate))
+                self.model.hyper.learnrate *= self.cp.loss / loss
+                stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
+                    self.model.hyper.learnrate))
 
             stderr.write("\n--------\n\n")
 
@@ -1511,7 +1573,7 @@ class ModelState:
             self.cp.printstats(stdout)
 
         # Final sample
-        progress(self.model, train_state)
+        #progress(self.model, train_state)
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
 
