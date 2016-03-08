@@ -29,6 +29,8 @@ def dotandadd(x_t, acc_t):
 acc_end = acc_seq[-1]
 dotandaddseq = theano.function([x, acc], [x_seq, acc_end], allow_input_downcast=True)
 
+
+
 k = T.iscalar('k')
 
 def dotandadd2(acc_t):
@@ -53,19 +55,10 @@ acc_s_seq, updates = theano.scan(
 acc_s = acc_s_seq[-1]
 dotandsoftacc = theano.function([acc, k], acc_s, allow_input_downcast=True)
 
+
+
 rng = T.shared_randomstreams.RandomStreams(seed=6547619)
 i_vec = T.vector('i_vec')
-
-#def pickprobof(acc_t, i_t):
-#    o_prob = T.nnet.softmax(acc_t)[0]
-#    i_next = rng.choice(size=(), a=2, p=o_prob).astype('int32')
-#    return o_prob, i_next
-
-#[acc_p_seq, i_seq], updates = theano.scan(
-#    fn=pickprobof,
-#    outputs_info=[dict(initial=acc), dict(initial=i_init)],
-#    n_steps=k)
-#pickaccsoft = theano.function([acc, i_init, k], acc_p_seq)
 
 def dotandprob(x_vec):
     randsize = T.as_tensor_variable(np.asarray(0, dtype='int64'))
@@ -78,6 +71,8 @@ x_v = T.vector('x_v')
     outputs_info=[dict(initial=x_v), None],
     n_steps=k)
 dotprob = theano.function([x_v, k], [x_v_seq, idx_seq], updates=updates, allow_input_downcast=True)
+
+
 
 
 # Run
