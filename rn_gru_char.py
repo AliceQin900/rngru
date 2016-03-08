@@ -1415,7 +1415,7 @@ class ModelState:
         else:
             return False
 
-    def restorefrom(self, checkpoint=None):
+    def restore(self, checkpoint=None):
         """Restores dataset and model params from specified checkpoint.
         Defaults to stored checkpoint if none provided.
         """
