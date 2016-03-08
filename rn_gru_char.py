@@ -71,15 +71,15 @@ class ModelParams():
             step_state = self.train_step(inputs[self.pos], outputs[self.pos], 
                 step_state, self.hyper.learnrate, self.hyper.decay)
 
-            # Optional callback
-            if callback and callback_every and train_pos % callback_every == 0:
-                callback(self, step_state)
-
             # Advance position and overflow
             self.pos += 1
             if self.pos >= input_len:
                 self.epoch += 1
                 self.pos = 0
+
+            # Optional callback
+            if callback and callback_every and train_pos % callback_every == 0:
+                callback(self, step_state)
 
         # Return final state
         return step_state
@@ -123,40 +123,6 @@ class ModelParams():
         chars = [ charset.charatidx(i) for i in idxs ]
         return charset.charatidx(seedch) + "".join(chars), end_state
 
-    def genchars_prob(self, charset, numchars, init_state=None, choose_max=False):
-        """Generate string of characters from current model parameters, 
-        using predicted next char probabilities (recursive version).
-        """
-
-        # Fresh state
-        prev_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
-
-        # Seed random character to start
-        idxs = [charset.randomidx()]
-
-        # Choose the probabilistic version or the most-likely one
-        # Note: we don't feed in the updated state, because predict_prob looks at
-        # the whole sequence we feed (back) in
-        for _ in range(numchars):
-            # Get probability vector of next char
-            next_probs, next_state = self.predict_prob(idxs, prev_state)
-
-            if choose_max:
-                # Get most-likely next char
-                next_idx = np.argmax(next_probs[-1])
-            else:
-                # Choose char from weighted random choice
-                next_idx = np.random.choice(charset.vocab_size, p=next_probs[-1])
-
-            # Append to list, and round we go
-            idxs.append(next_idx)
-
-        # Now translate from indicies to characters, and construct string
-        chars = [ charset.charatidx(i) for i in idxs ]
-
-        # We *do*, however, return the final updated state
-        return "".join(chars), next_state
-
     # TODO: Non-Theano step function
     # TODO: Non-Theano char generator
 
@@ -181,7 +147,8 @@ class ModelParams():
 class GRUSimple(ModelParams):
     """Simple GRU network.
     U and W are gate matrices, 3 per layer (reset gate, update gate, state gate).
-    V translates back to vocab-sized vector for output (classification layer).
+    V translates back to vocab-sized vector for input to next layer. Softmax 
+    classification applied to final output.
     """
 
     def __init__(self, hyper, epoch=0, pos=0, U=None, W=None, V=None, b=None, c=None):
@@ -657,7 +624,7 @@ class GRUEmbed(ModelParams):
 
 
 class GRURNN(ModelParams):
-    """Multi-layer GRU with RNN layer in front."""
+    """Multi-layer GRU with vanilla RNN layer in front."""
 
     def __init__(self, hyper, epoch=0, pos=0, E=None, F=None, U=None, W=None, V=None, a=None, b=None, c=None):
         super(GRURNN, self).__init__(hyper, epoch, pos)
@@ -1535,13 +1502,16 @@ class ModelState:
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 self.model.hyper.learnrate *= 0.5
-                stderr.write("Loss increased, adjusted learning rate to {0:f}\n".format(self.model.hyper.learnrate))
+                stderr.write("Loss increased, adjusted learning rate to {0:.6f}\n".format(self.model.hyper.learnrate))
 
             stderr.write("\n--------\n\n")
 
             # Take checkpoint and print stats
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
+
+        # Final sample
+        progress(self.model, train_state)
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
 
