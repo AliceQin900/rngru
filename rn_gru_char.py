@@ -403,15 +403,15 @@ class GRUSimple(ModelParams):
         return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
 
-class GRUEmbed(ModelParams):
-    """GRU network with translation layer before/after.
+class GRUDecode(ModelParams):
+    """GRU network with translation matrix before/after.
     U and W are gate matrices, 3 per layer (reset gate, update gate, state gate).
-    V translates from vocab-sized vector to state-sized vector for input,
-    then back to vocab-sized vector for output.
+    V transforms from vocab-sized vector to state-sized vector for input,
+    then its transpose back to vocab-sized vector for output.
     """
 
     def __init__(self, hyper, epoch=0, pos=0, V=None, U=None, W=None, a=None, b=None, c=None):
-        super(GRUEmbed, self).__init__(hyper, epoch, pos)
+        super(GRUDecode, self).__init__(hyper, epoch, pos)
 
         # Randomly initialize matrices if not provided
         # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
@@ -666,31 +666,38 @@ class GRUEmbed(ModelParams):
         return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
 
-class GRURNN(ModelParams):
-    """Multi-layer GRU with vanilla RNN layer in front."""
+class GRUResize(ModelParams):
+    """GRU network like GRUSimple, but first layer has vocab-sized vector input and
+    state-sized vector output, while additional layers input and output state-sized
+    vectors.
+    Matrices E and F are first-layer equivalents to U and W in subsequent layers, 
+    renamed for clarity.
+    Matrix V transforms state-sized output of last layer to vocab-sized vector, 
+    and softmax applied to final output.
+    """
 
     def __init__(self, hyper, epoch=0, pos=0, E=None, F=None, U=None, W=None, V=None, a=None, b=None, c=None):
-        super(GRURNN, self).__init__(hyper, epoch, pos)
+        super(GRUResize, self).__init__(hyper, epoch, pos)
 
         # Randomly initialize matrices if not provided
-        # U and W get 3 2D matrices per layer (reset and update gates plus hidden state)
+        # E, F, U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
         # NOTE2: copy provided arrays due to weird interactions between numpy load and Theano
         tE = np.copy(E) if isinstance(E, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (hyper.state_size, hyper.vocab_size))
+            (3, hyper.state_size, hyper.vocab_size))
 
         tF = np.copy(F) if isinstance(F, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.state_size, hyper.state_size))
+            (3, hyper.state_size, hyper.state_size))
 
         tU = np.copy(U) if isinstance(U, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.layers*3, hyper.state_size, hyper.state_size))
+            ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
 
         tW = np.copy(W) if isinstance(W, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.layers*3, hyper.state_size, hyper.state_size))
+            ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
 
         tV = np.copy(V) if isinstance(V, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
@@ -698,8 +705,8 @@ class GRURNN(ModelParams):
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        ta = np.copy(a) if isinstance(a, np.ndarray) else np.zeros(hyper.state_size)
-        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros(((hyper.layers*3), hyper.state_size))
+        ta = np.copy(a) if isinstance(a, np.ndarray) else np.zeros((3, hyper.state_size))
+        tb = np.copy(b) if isinstance(b, np.ndarray) else np.zeros(((hyper.layers-1)*3, hyper.state_size))
         tc = np.copy(c) if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
         # Shared variables
@@ -758,18 +765,29 @@ class GRURNN(ModelParams):
 
             # Not taking shortcut anymore
             # Create one-hot vector from x_t using column of xI
-            x_vec = xI[:,x_t]
+            inout = xI[:,x_t]
 
-            # Vocab-to-state RNN
-            inout = T.tanh(E.dot(x_vec) + F.dot(s_t[0]) + a)
-            s_next = T.set_subtensor(s_next[0], inout)
+            # Vocab-to-state GRU layer
+            # Get previous state for this layer
+            s_prev = s_t[0]
+            # Update gate
+            z = T.nnet.hard_sigmoid(E[0].dot(inout) + F[0].dot(s_prev) + a[0])
+            # Reset gate
+            r = T.nnet.hard_sigmoid(E[1].dot(inout) + F[1].dot(s_prev) + a[1])
+            # Candidate state
+            h = T.tanh(E[2].dot(inout) + F[2].dot(r * s_prev) + a[2])
+            # New state
+            s_new = (T.ones_like(z) - z) * h + z * s_prev
+            s_next = T.set_subtensor(s_next[0], s_new)
+            # Update for next layer (might add dropout here later)
+            inout = s_new
 
-            # Loop over GRU layers
-            for layer in range(layers):
+            # Loop over subsequent GRU layers
+            for layer in range(layers-1):
                 # 3 matrices per layer
                 L = layer * 3
                 # Get previous state for this layer
-                s_prev = s_t[layer+1]
+                s_prev = s_t[layer]
                 # Update gate
                 z = T.nnet.hard_sigmoid(U[L].dot(inout) + W[L].dot(s_prev) + b[L])
                 # Reset gate
@@ -778,7 +796,7 @@ class GRURNN(ModelParams):
                 h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(r * s_prev) + b[L+2])
                 # New state
                 s_new = (T.ones_like(z) - z) * h + z * s_prev
-                s_next = T.set_subtensor(s_next[layer+1], s_new)
+                s_next = T.set_subtensor(s_next[layer], s_new)
                 # Update for next layer or final output (might add dropout here later)
                 inout = s_new
 
@@ -1192,8 +1210,9 @@ class ModelState:
     # Model types
     modeltypes = {
         'GRUSimple': GRUSimple,
-        'GRUEmbed': GRUEmbed,
-        'GRURNN': GRURNN
+        'GRUEmbed': GRUDecode,
+        'GRUDecode': GRUDecode,
+        'GRUResize': GRUResize
     }
 
     def __init__(self, chars, curdir, modeltype='GRUSimple', srcinfo=None, cpfile=None, 
