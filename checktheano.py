@@ -10,7 +10,7 @@ mat = theano.shared(name='mat', value=matbase.astype(theano.config.floatX))
 matbase2 = np.array([[1.0, 0.5], [0.5, 1.0]])
 mat2 = theano.shared(name='mat2', value=matbase2.astype(theano.config.floatX))
 matbase3 = np.identity(5)
-mat3 = theano.shared(name='mat2', value=matbase3.astype(theano.config.floatX))
+mat3 = theano.shared(name='mat3', value=matbase3.astype(theano.config.floatX))
 
 x = T.matrix('x')
 acc = T.vector('acc')
@@ -57,7 +57,7 @@ dotandsoftacc = theano.function([acc, k], acc_s, allow_input_downcast=True)
 
 
 
-rng = T.shared_randomstreams.RandomStreams(seed=6547619)
+rng = T.shared_randomstreams.RandomStreams(seed=6548619)
 i_vec = T.vector('i_vec')
 
 def dotandprob(x_vec):
@@ -72,37 +72,88 @@ x_v = T.vector('x_v')
     n_steps=k)
 dotprob = theano.function([x_v, k], [x_v_seq, idx_seq], updates=updates, allow_input_downcast=True)
 
+# one-hot testing
+x_ints = T.ivector('x_ints')
+x_dim = T.iscalar('x_dim')
+to_onehot = theano.function([x_ints, x_dim], theano.tensor.extra_ops.to_one_hot(x_ints, x_dim))
 
+x_mat = T.matrix('x_mat')
+y_scale = T.scalar('scale')
+
+y_onehot, updates = theano.scan(
+    fn=lambda val, scale: scale * val,
+    outputs_info=None,
+    sequences=x_mat,
+    non_sequences=y_scale)
+scale_onehot = theano.function(inputs=[x_mat, y_scale], outputs=y_onehot)
+
+def matdotvec(Xmat, Yvec):
+    return T.dot(Xmat, Yvec.T)
+y_dot, updates = theano.scan(
+    fn=matdotvec,
+    outputs_info=None,
+    sequences=x,
+    non_sequences=x_mat)
+dot_onehot = theano.function(inputs=[x_mat, x], outputs=y_dot)
+
+def dotcol(x, dim, mat_b):
+    return mat_b.dot(T.eye(dim)[:,x])
+y_col, updates = theano.scan(
+    fn=dotcol,
+    outputs_info=None,
+    sequences=x_ints,
+    non_sequences=[x_dim, x_mat])
+col_onehot = theano.function(inputs=[x_ints, x_dim, x_mat], outputs=y_col)
 
 
 # Run
 
 testvecs = np.array([[0, 1], [1, 2], [2, 3]])
 accinit = np.array([1, 1])
-xv = np.array([0.1, 0.2, 0.4, 0.2, 0.1])
-
 xes, acclast = dotandaddseq(testvecs, accinit)
+print()
 print(xes)
 print()
 print(acclast)
-print()
+print("\n----\n")
 
 accafter = dotandaddacc(acclast, 3)
 print(accafter)
-print()
+print("\n----\n")
 
 accafterseq = dotandaddaccseq(acclast, 3)
 print(accafterseq)
-print()
+print("\n----\n")
 
 accaftersoft = dotandsoftacc(acclast, 4)
 print(accaftersoft)
-print()
+print("\n----\n")
 
+xv = np.array([0.1, 0.2, 0.4, 0.2, 0.1])
 xv_p, i_p = dotprob(xv, 5)
 print(xv_p)
 print()
 print(i_p)
+print("\n----\n")
+
+xivec = np.array([1, 3, 2, 0, 4, 4, 2, 1], dtype='int32')
+xidim = xivec[np.argmax(xivec)] + 1
+xonehot = to_onehot(xivec, xidim)
+print(xivec, xidim)
 print()
+print(xonehot)
+print("\n----\n")
+
+yonehot = scale_onehot(xonehot, 0.5)
+print(yonehot)
+print("\n----\n")
+
+ydot = dot_onehot(xv_p, xonehot)
+print(ydot)
+print("\n----\n")
+
+ycol = col_onehot(xivec, xidim, xv_p)
+print(ycol)
+print("\n----\n")
 
 
