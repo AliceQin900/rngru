@@ -78,7 +78,7 @@ class ModelParams():
                 self.pos = 0
 
             # Optional callback
-            if callback and callback_every and train_pos % callback_every == 0:
+            if callback and callback_every and (train_pos + 1) % callback_every == 0:
                 callback(self, step_state)
 
         # Return final state
@@ -1537,6 +1537,9 @@ class ModelState:
         # Start with a blank state
         train_state = self.model.freshstate()
 
+        # First sample
+        progress(self.model, train_state)
+
         # Train for num_rounds
         for roundnum in range(num_rounds):
             # Train...
@@ -1571,9 +1574,6 @@ class ModelState:
             # Take checkpoint and print stats
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
-
-        # Final sample
-        #progress(self.model, train_state)
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
 
