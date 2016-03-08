@@ -1132,7 +1132,7 @@ class Checkpoint:
         basefilename = modeldatetime.strftime("%Y-%m-%d-%H:%M:%S-UTC")
 
         # Save model file
-        modelfilename = os.path.join(savedir, basefilename + ".npz")
+        modelfilename = os.path.join(savedir, basefilename + "-model.npz")
         try:
             modelfile = open(modelfilename, 'wb')
         except OSError as e:
@@ -1144,7 +1144,7 @@ class Checkpoint:
 
             # Create checkpoint
             cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss)
-            cpfilename = os.path.join(savedir, basefilename + ".p")
+            cpfilename = os.path.join(savedir, basefilename + "-model.p")
 
             # Save checkpoint
             try:
@@ -1190,6 +1190,7 @@ Model file: {2}
 Epoch: {3:d}
 Position: {4:d}
 Loss: {5:.4f}
+
 """
         outfile.write(printstr.format(
             self.cp_date.strftime("%Y-%m-%d %H:%M:%S %Z"), 
