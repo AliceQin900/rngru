@@ -1565,8 +1565,14 @@ class ModelState:
 
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
-                self.model.hyper.learnrate *= self.cp.loss / loss
+                # Loss increasing, lower learning rate
+                self.model.hyper.learnrate *= 0.5
                 stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
+                    self.model.hyper.learnrate))
+            elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.99:
+                # Loss not decreasing enough, raise learning rate
+                self.model.hyper.learnrate *= 1.4142
+                stderr.write("Loss decreased too little between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
 
             stderr.write("\n--------\n\n")
