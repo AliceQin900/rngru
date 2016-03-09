@@ -159,6 +159,12 @@ xmat_dot_mat, updates = theano.scan(
     sequences=x_3d)
 mat_dot_mat = theano.function(inputs=[x_3d], outputs=xmat_dot_mat)
 
+
+# Probability testing
+choosefromprobs = rng.multinomial(pvals=x_v, dtype=theano.config.floatX)
+chooseprob = theano.function(inputs=[x_v], outputs=choosefromprobs)
+
+
 # Run
 
 testvecs = np.array([[0, 1], [1, 2], [2, 3]])
@@ -232,6 +238,10 @@ xi_reshaped = xi_onehots.transpose(1, 0, 2)
 xi_mat5 = mat_dot_mat(xi_reshaped)
 print(xi_reshaped, '\n')
 print(xi_mat5)
+print("\n----\n")
+
+vec_choice = chooseprob(np.array([0.1, 0.2, 0.3, 0.4]).astype(theano.config.floatX))
+print(vec_choice)
 print("\n----\n")
 
 # Testing for moving data to shared vars
