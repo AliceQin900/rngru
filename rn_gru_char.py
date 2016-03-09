@@ -627,11 +627,16 @@ class DataSet:
         try:
             datalen = self.data_len
         except AttributeError:
-            datalen = len(x_array)
+            datalen = len(self.x_array)
             self.data_len = datalen
 
         # TODO: use eye()/ravel()/reshape() instead, check if faster
+        x_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.x_array.ravel()].reshape(
+            self.x_array.shape[0], self.x_array.shape[1], vocab)
+        y_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.y_array.ravel()].reshape(
+            self.y_array.shape[0], self.y_array.shape[1], vocab)
 
+        '''
         # Create 3D arrays (# of seqences, seq length, vocab size)
         x_onehots = np.zeros((self.data_len, self.seq_len, vocab))
         y_onehots = np.zeros((self.data_len, self.seq_len, vocab))
@@ -642,13 +647,14 @@ class DataSet:
         # Build one-hots in specified indices
         x_onehots[xx, yy, self.x_array] = 1.0
         y_onehots[xx, yy, self.y_array] = 1.0
+        '''
 
         # Create shared vars
         # These can be large, so we don't necessarily want them on the GPU
         # self.x_onehots = theano.shared(name='x_onehots', value=x_onehots)
         # self.y_onehots = theano.shared(name='y_onehots', value=y_onehots)
-        self.x_onehots = x_onehots.astype(theano.config.floatX)
-        self.y_onehots = y_onehots.astype(theano.config.floatX)
+        self.x_onehots = x_onehots #.astype(theano.config.floatX)
+        self.y_onehots = y_onehots #.astype(theano.config.floatX)
 
         stderr.write("done!\n")
 
