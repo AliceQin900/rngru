@@ -710,31 +710,20 @@ class DataSet:
             datalen = len(self.x_array)
             self.data_len = datalen
 
-        # TODO: use eye()/ravel()/reshape() instead, check if faster
+        time1 = time.time()
+
+        # numpy fancy indexing is fun!
         x_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.x_array]
         y_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.y_array]
 
-        '''
-        # Create 3D arrays (# of seqences, seq length, vocab size)
-        x_onehots = np.zeros((self.data_len, self.seq_len, vocab))
-        y_onehots = np.zeros((self.data_len, self.seq_len, vocab))
-
-        # Get fancy multi-indexer
-        xx, yy = np.ix_(np.arange(self.data_len), np.arange(self.seq_len))
-
-        # Build one-hots in specified indices
-        x_onehots[xx, yy, self.x_array] = 1.0
-        y_onehots[xx, yy, self.y_array] = 1.0
-        '''
-
-        # Create shared vars
         # These can be large, so we don't necessarily want them on the GPU
-        # self.x_onehots = theano.shared(name='x_onehots', value=x_onehots)
-        # self.y_onehots = theano.shared(name='y_onehots', value=y_onehots)
+        # Thus they're not Theano shared vars
         self.x_onehots = x_onehots #.astype(theano.config.floatX)
         self.y_onehots = y_onehots #.astype(theano.config.floatX)
 
-        stderr.write("done!\n")
+        time2 = time.time()
+
+        stderr.write("done! Took {0:.4f} ms.\n".format((time2 - time1) * 1000.0))
 
     def __getstate__(self):
         state = self.__dict__.copy()
