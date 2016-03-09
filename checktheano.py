@@ -11,6 +11,39 @@ matbase2 = np.array([[1.0, 0.5], [0.5, 1.0]])
 mat2 = theano.shared(name='mat2', value=matbase2.astype(theano.config.floatX))
 matbase3 = np.identity(5)
 mat3 = theano.shared(name='mat3', value=matbase3.astype(theano.config.floatX))
+matbase4 = np.array(
+[[[0.1, 0.2, 0.4, 0.2, 0.0],
+  [0.1, 0.2, 0.4, 0.2, 0.1],
+  [0.1, 0.2, 0.4, 0.2, 0.2],
+  [0.1, 0.2, 0.4, 0.2, 0.3],
+  [0.1, 0.2, 0.4, 0.2, 0.4]],
+
+ [[0.0, 0.6, 0.5, 0.2, 0.1],
+  [0.1, 0.2, 0.4, 0.8, 0.3],
+  [0.2, 0.8, 0.5, 0.2, 0.1],
+  [0.3, 0.2, 0.4, 0.8, 0.3],
+  [0.4, 0.6, 0.5, 0.2, 0.1]]])
+mat4 = theano.shared(name='mat4', value=matbase4.astype(theano.config.floatX))
+
+onehotvecsbase = np.array(
+[[[ 0., 1., 0., 0., 0.],
+  [ 0., 0., 0., 1., 0.],
+  [ 0., 0., 1., 0., 0.],
+  [ 1., 0., 0., 0., 0.],
+  [ 0., 0., 0., 0., 1.],
+  [ 0., 0., 0., 0., 1.],
+  [ 0., 0., 1., 0., 0.],
+  [ 0., 1., 0., 0., 0.]],
+
+ [[ 0., 0., 1., 0., 0.],
+  [ 0., 0., 0., 0., 1.],
+  [ 1., 0., 0., 0., 0.],
+  [ 0., 1., 0., 0., 0.],
+  [ 0., 0., 0., 1., 0.],
+  [ 0., 0., 1., 0., 0.],
+  [ 0., 0., 0., 0., 1.],
+  [ 1., 0., 0., 0., 0.]]])
+onehotsshared = theano.shared(name='onehotsshared', value=onehotvecsbase.astype(theano.config.floatX))
 
 x = T.matrix('x')
 acc = T.vector('acc')
@@ -105,6 +138,14 @@ y_col, updates = theano.scan(
     non_sequences=[x_dim, x_mat])
 col_onehot = theano.function(inputs=[x_ints, x_dim, x_mat], outputs=y_col)
 
+def vecdotmat(x, y_idx):
+    return mat4[y_idx].dot(x)
+x_dot_mat, updates = theano.scan(
+    fn=vecdotmat,
+    outputs_info=None,
+    sequences=x,
+    non_sequences=x_dim)
+dot_mat = theano.function(inputs=[x, x_dim], outputs=x_dot_mat)
 
 # Run
 
@@ -156,4 +197,46 @@ ycol = col_onehot(xivec, xidim, xv_p)
 print(ycol)
 print("\n----\n")
 
+ximat = np.array([[1, 3, 2, 0, 4, 4, 2, 1], [2, 4, 0 ,1, 3, 2, 4, 0]])
+xilen = len(ximat)
+xi_onehots = np.zeros((xilen, 8, 5))
+xx, yy = np.ix_(np.arange(xilen), np.arange(8))
+xi_onehots[xx, yy, ximat] = 1.0
+print(ximat, '\n')
+print(xi_onehots)
+print("\n----\n")
 
+xi_mat4 = dot_mat(xi_onehots[0], 0)
+print(xi_mat4, '\n')
+xi_mat4 = dot_mat(xi_onehots[0], 1)
+print(xi_mat4, '\n')
+xi_mat4 = dot_mat(xi_onehots[1], 0)
+print(xi_mat4, '\n')
+xi_mat4 = dot_mat(xi_onehots[1], 1)
+print(xi_mat4)
+print("\n----\n")
+
+# Testing for moving data to shared vars
+
+xmatbase = np.arange(25).reshape((5, 5)) * 0.1
+xmat_shared = theano.shared(name='xmat_shared', value=xmatbase).astype(theano.config.floatX)
+# Note this is dependent on earlier vars
+xi_onehots_shared = theano.shared(name='xi_onehots_shared', value=xi_onehots).astype(theano.config.floatX)
+
+sh_i_idx = T.iscalar('sh_i_idx')
+#sh_j_range = T.arange(xi_onehots_shared[sh_i_idx].shape[0])
+def dotshared(jvec):
+    #return xmat_shared.dot(xi_onehots_shared[i,j])
+    return xmat_shared.dot(jvec)
+dotshared_out, updates = theano.scan(
+    fn=dotshared,
+    outputs_info=None,
+    sequences=xi_onehots_shared[sh_i_idx])
+dot_shared = theano.function(inputs=[sh_i_idx], outputs=dotshared_out)
+    #non_sequences=sh_i_idx,
+
+xi_sh_out = dot_shared(0)
+print(xi_sh_out, '\n')
+xi_sh_out = dot_shared(1)
+print(xi_sh_out)
+print("\n----\n")
