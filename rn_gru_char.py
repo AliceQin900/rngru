@@ -6,6 +6,8 @@ import numpy as np
 import theano
 import theano.tensor as T
 
+theano.config.exception_verbosity='high'
+
 
 class HyperParams:
     """Hyperparameters for GRU setup."""
@@ -259,16 +261,6 @@ class GRUResize(ModelParams):
     def __build_t__(self):
         """Build Theano graph and define functions."""
 
-        # Inputs
-        x = T.matrix('x')
-        y = T.matrix('y')
-        s_in = T.matrix('s_in')
-
-        # Batch Inputs
-        x_bat = T.tensor3('x_bat')
-        y_bat = T.tensor3('y_bat')
-        s_in_bat = T.tensor3('s_in_bat')
-
         # Constants(ish)
         layers = self.hyper.layers
         vocab_size = self.hyper.vocab_size
@@ -280,7 +272,7 @@ class GRUResize(ModelParams):
 
         # Forward propagation
         def forward_step(x_t, s_t):
-            """Input vector x(t) and state matrix s(t)."""
+            """Input vector/matrix x(t) and state matrix s(t)."""
 
             # Initialize state to return
             s_next = T.zeros_like(s_t)
@@ -326,15 +318,27 @@ class GRUResize(ModelParams):
                 inout = s_new
 
             # Final output
-            # Theano's softmax returns matrix, and we just want the column
-            o_t = T.nnet.softmax(T.dot(inout, V) + c)[0]
+            o_t = T.dot(inout, V) + c
             return o_t, s_next
-            #o_norm = o_t / T.sum(o_t)
-            #return o_norm, s_next
+
+
+        ### SINGLE-SEQUENCE TRAINING ###
+
+        # Inputs
+        x = T.matrix('x')
+        y = T.matrix('y')
+        s_in = T.matrix('s_in')
+
+        def single_train_step(x_in, s_in):
+            o_p, s_out = forward_step(x_in, s_in)
+            # Theano's softmax returns matrix, and we just want the one entry
+            return T.nnet.softmax(o_p)[0], s_out
 
         # Now get Theano to do the heavy lifting
-        [o, s_seq], updates = theano.scan(
-            forward_step, sequences=x, truncate_gradient=self.hyper.bptt_truncate,
+        [o, s_seq], _ = theano.scan(
+            single_train_step, 
+            sequences=x, 
+            truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in)])
         s_out = s_seq[-1]
 
@@ -366,15 +370,6 @@ class GRUResize(ModelParams):
         mb = decayrate * self.mb + (1 - decayrate) * db ** 2
         mc = decayrate * self.mc + (1 - decayrate) * dc ** 2
 
-        # Assign Theano-constructed functions to instance
-
-        # Error
-        self.errs = theano.function([x, y, s_in], [o_errs, s_out])
-        self.err = theano.function([x, y, s_in], [cost, s_out])
-        # Gradients
-        # We'll use this at some point for gradient checking
-        self.grad = theano.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
-
         # Training step function
         self.train_step = theano.function(
             [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
@@ -398,7 +393,89 @@ class GRUResize(ModelParams):
                 (self.mc, mc)],
             name = 'train_step')
 
-        # Sequence generation
+
+        ### BATCH-SEQUENCE TRAINING ###
+
+        # Batch Inputs
+        x_bat = T.tensor3('x_bat')
+        y_bat = T.tensor3('y_bat')
+        s_in_bat = T.tensor3('s_in_bat')
+
+        def batch_train_step(x_in, s_in):
+            o_p, s_out = forward_step(x_in, s_in)
+            # We want the whole matrix from softmax for batches
+            return T.nnet.softmax(o_p), s_out
+
+        [o_bat, s_seq_bat], _ = theano.scan(
+            batch_train_step, 
+            sequences=x_bat, 
+            truncate_gradient=self.hyper.bptt_truncate,
+            outputs_info=[None, dict(initial=s_in_bat)])
+        s_out_bat = s_seq_bat[-1]
+
+        # Costs
+        # Should regularize at some point
+        o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
+        y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
+        cost_bat = T.sum(T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat))
+
+        # Gradients
+        dE_bat = T.grad(cost_bat, E)
+        dF_bat = T.grad(cost_bat, F)
+        dU_bat = T.grad(cost_bat, U)
+        dW_bat = T.grad(cost_bat, W)
+        dV_bat = T.grad(cost_bat, V)
+        da_bat = T.grad(cost_bat, a)
+        db_bat = T.grad(cost_bat, b)
+        dc_bat = T.grad(cost_bat, c)
+
+        # rmsprop parameter updates
+        mE_bat = decayrate * self.mE + (1 - decayrate) * dE_bat ** 2
+        mF_bat = decayrate * self.mF + (1 - decayrate) * dF_bat ** 2
+        mU_bat = decayrate * self.mU + (1 - decayrate) * dU_bat ** 2
+        mW_bat = decayrate * self.mW + (1 - decayrate) * dW_bat ** 2
+        mV_bat = decayrate * self.mV + (1 - decayrate) * dV_bat ** 2
+        ma_bat = decayrate * self.ma + (1 - decayrate) * da_bat ** 2
+        mb_bat = decayrate * self.mb + (1 - decayrate) * db_bat ** 2
+        mc_bat = decayrate * self.mc + (1 - decayrate) * dc_bat ** 2
+
+        # Batch training step function
+        self.train_step_bat = theano.function(
+            [x_bat, y_bat, s_in_bat, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
+            s_out_bat,
+            updates=[
+                (E, E - learnrate * dE_bat / T.sqrt(mE_bat + 1e-6)),
+                (F, F - learnrate * dF_bat / T.sqrt(mF_bat + 1e-6)),
+                (U, U - learnrate * dU_bat / T.sqrt(mU_bat + 1e-6)),
+                (W, W - learnrate * dW_bat / T.sqrt(mW_bat + 1e-6)),
+                (V, V - learnrate * dV_bat / T.sqrt(mV_bat + 1e-6)),
+                (a, a - learnrate * da_bat / T.sqrt(ma_bat + 1e-6)),
+                (b, b - learnrate * db_bat / T.sqrt(mb_bat + 1e-6)),
+                (c, c - learnrate * dc_bat / T.sqrt(mc_bat + 1e-6)),
+                (self.mE, mE_bat),
+                (self.mF, mF_bat),
+                (self.mU, mU_bat),
+                (self.mW, mW_bat),
+                (self.mV, mV_bat),
+                (self.ma, ma_bat),
+                (self.mb, mb_bat),
+                (self.mc, mc_bat)],
+            name = 'train_step_bat')
+
+
+        ### ERROR CHECKING ###
+
+        # Error
+        self.errs = theano.function([x, y, s_in], [o_errs, s_out])
+        self.err = theano.function([x, y, s_in], [cost, s_out])
+
+        # Gradients
+        # We'll use this at some point for gradient checking
+        self.grad = theano.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
+
+
+        ### SEQUENCE GENERATION ###
+
         x_in = T.vector('x_in')
         k = T.iscalar('k')
 
@@ -443,7 +520,7 @@ class GRUResize(ModelParams):
         # Predicted next char probability (old version, reqires sequence input)
         self.predict_prob = theano.function([x, s_in], [o, s_out])
 
-        # Whew, I think we're done!
+        ### Whew, I think we're done! ###
 
     @classmethod
     def loadfromfile(cls, infile, transpose=False):
@@ -494,8 +571,11 @@ class GRUResize(ModelParams):
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
 
     # TODO: scale state by batch size
-    def freshstate(self, batchsize=1):
-        return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
+    def freshstate(self, batchsize=0):
+        if batchsize > 0:
+            return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=theano.config.floatX)
+        else:
+            return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
 
 # TODO: change to let CharSet get chars from string, with frequencies and line beginnings
