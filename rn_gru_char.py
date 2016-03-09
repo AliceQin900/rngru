@@ -1057,7 +1057,7 @@ class DataSet:
             stderr.write("Initialized arrays, x: {0} y: {1}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
         # Create Theano shared vars
-        self._build_onehots(self.vocab_size)
+        #self._build_onehots(self.vocab_size)
 
     def _build_onehots(self, vocab_size=None):
         """Build one-hot encodings of each sequence and store as
@@ -1092,8 +1092,8 @@ class DataSet:
         y_onehots[xx, yy, self.y_array] = 1.0
 
         # Create shared vars
-        self.x_shared = theano.shared(name='x_shared', value=x_onehots)
-        self.y_shared = theano.shared(name='y_shared', value=y_onehots)
+        self.x_onehots = theano.shared(name='x_onehots', value=x_onehots)
+        self.y_onehots = theano.shared(name='y_onehots', value=y_onehots)
 
         stderr.write("done!\n")
 
@@ -1101,14 +1101,14 @@ class DataSet:
         state = self.__dict__.copy()
         # References to onehot-encoded shared data
         # shouldn't be serialized here, so remove them
-        state['x_shared'] = None
-        state['y_shared'] = None
+        if 'x_onehots' in state:
+            state['x_onehots'] = None
+        if 'y_onehots' in state:
+            state['y_onehots'] = None
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        # Rebuild onehot-encoded shared data
-        self._build_onehots()
 
     @staticmethod
     def loadfromfile(filename, charset=None):

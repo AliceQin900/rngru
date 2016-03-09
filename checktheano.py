@@ -4,6 +4,7 @@ import numpy as np
 import theano
 import theano.tensor as T
 theano.config.exception_verbosity='high'
+#theano.config.floatX = 'float32'
 
 matbase = np.array([[1.0, 0.0], [0.0, 1.0]])
 mat = theano.shared(name='mat', value=matbase.astype(theano.config.floatX))
@@ -199,7 +200,7 @@ print("\n----\n")
 
 ximat = np.array([[1, 3, 2, 0, 4, 4, 2, 1], [2, 4, 0 ,1, 3, 2, 4, 0]])
 xilen = len(ximat)
-xi_onehots = np.zeros((xilen, 8, 5))
+xi_onehots = np.zeros((xilen, 8, 5)).astype(theano.config.floatX)
 xx, yy = np.ix_(np.arange(xilen), np.arange(8))
 xi_onehots[xx, yy, ximat] = 1.0
 print(ximat, '\n')
@@ -219,9 +220,10 @@ print("\n----\n")
 # Testing for moving data to shared vars
 
 xmatbase = np.arange(25).reshape((5, 5)) * 0.1
-xmat_shared = theano.shared(name='xmat_shared', value=xmatbase).astype(theano.config.floatX)
+xmat_shared = theano.shared(name='xmat_shared', value=xmatbase.astype(theano.config.floatX))
 # Note this is dependent on earlier vars
-xi_onehots_shared = theano.shared(name='xi_onehots_shared', value=xi_onehots).astype(theano.config.floatX)
+#xi_onehots_shared = theano.shared(name='xi_onehots_shared', value=xi_onehots)
+ximat_shared = theano.shared(name='ximat_shared', value=ximat)
 
 sh_i_idx = T.iscalar('sh_i_idx')
 #sh_j_range = T.arange(xi_onehots_shared[sh_i_idx].shape[0])
@@ -231,7 +233,7 @@ def dotshared(jvec):
 dotshared_out, updates = theano.scan(
     fn=dotshared,
     outputs_info=None,
-    sequences=xi_onehots_shared[sh_i_idx])
+    sequences=T.extra_ops.to_one_hot(ximat_shared[sh_i_idx], 5))
 dot_shared = theano.function(inputs=[sh_i_idx], outputs=dotshared_out)
     #non_sequences=sh_i_idx,
 
