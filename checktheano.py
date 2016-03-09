@@ -13,11 +13,11 @@ mat2 = theano.shared(name='mat2', value=matbase2.astype(theano.config.floatX))
 matbase3 = np.identity(5)
 mat3 = theano.shared(name='mat3', value=matbase3.astype(theano.config.floatX))
 matbase4 = np.array(
-[[[0.1, 0.2, 0.4, 0.2, 0.0],
-  [0.1, 0.2, 0.4, 0.2, 0.1],
-  [0.1, 0.2, 0.4, 0.2, 0.2],
-  [0.1, 0.2, 0.4, 0.2, 0.3],
-  [0.1, 0.2, 0.4, 0.2, 0.4]],
+[[[0.1, 0.2, 0.4, 0.3, 0.0],
+  [0.1, 0.2, 0.4, 0.3, 0.1],
+  [0.1, 0.2, 0.4, 0.3, 0.2],
+  [0.1, 0.2, 0.4, 0.3, 0.3],
+  [0.1, 0.2, 0.4, 0.3, 0.4]],
 
  [[0.0, 0.6, 0.5, 0.2, 0.1],
   [0.1, 0.2, 0.4, 0.8, 0.3],
@@ -25,6 +25,8 @@ matbase4 = np.array(
   [0.3, 0.2, 0.4, 0.8, 0.3],
   [0.4, 0.6, 0.5, 0.2, 0.1]]])
 mat4 = theano.shared(name='mat4', value=matbase4.astype(theano.config.floatX))
+matbase5 = np.arange(25).reshape((5, 5)) * 0.1
+mat5 = theano.shared(name='mat5', value=matbase5.astype(theano.config.floatX))
 
 onehotvecsbase = np.array(
 [[[ 0., 1., 0., 0., 0.],
@@ -148,6 +150,15 @@ x_dot_mat, updates = theano.scan(
     non_sequences=x_dim)
 dot_mat = theano.function(inputs=[x, x_dim], outputs=x_dot_mat)
 
+x_3d = T.tensor3('x_3d')
+def matdotmat(inmat):
+    return T.dot(inmat, mat5)
+xmat_dot_mat, updates = theano.scan(
+    fn=matdotmat,
+    outputs_info=None,
+    sequences=x_3d)
+mat_dot_mat = theano.function(inputs=[x_3d], outputs=xmat_dot_mat)
+
 # Run
 
 testvecs = np.array([[0, 1], [1, 2], [2, 3]])
@@ -217,8 +228,14 @@ xi_mat4 = dot_mat(xi_onehots[1], 1)
 print(xi_mat4)
 print("\n----\n")
 
-# Testing for moving data to shared vars
+xi_reshaped = xi_onehots.transpose(1, 0, 2)
+xi_mat5 = mat_dot_mat(xi_reshaped)
+print(xi_reshaped, '\n')
+print(xi_mat5)
+print("\n----\n")
 
+# Testing for moving data to shared vars
+'''
 xmatbase = np.arange(25).reshape((5, 5)) * 0.1
 xmat_shared = theano.shared(name='xmat_shared', value=xmatbase.astype(theano.config.floatX))
 # Note this is dependent on earlier vars
@@ -242,3 +259,4 @@ print(xi_sh_out, '\n')
 xi_sh_out = dot_shared(1)
 print(xi_sh_out)
 print("\n----\n")
+'''
