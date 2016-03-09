@@ -1023,6 +1023,7 @@ class DataSet:
     def __init__(self, datastr, charset, seq_len=50, srcinfo=None, savedarrays=None):
         self.datastr = datastr
         self.charinfo = charset.srcinfo
+        self.vocab_size = charset.vocab_size
         self.seq_len = seq_len
         self.srcinfo = srcinfo
 
@@ -1055,8 +1056,62 @@ class DataSet:
 
             stderr.write("Initialized arrays, x: {0} y: {1}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
+        # Create Theano shared vars
+        self._build_onehots(self.vocab_size)
+
+    def _build_onehots(self, vocab_size=None):
+        """Build one-hot encodings of each sequence and store as
+        Theano shared variables.
+        """
+
+        # If we're passed a charset, great - if not, fall back to inferring vocab size
+        if vocab_size:
+            self.vocab_size = vocab_size
+            vocab = vocab_size
+        else:
+            try:
+                vocab = self.vocab_size
+            except AttributeError as e:
+                stderr.write("No vocabulary size found, inferring from dataset...\n")
+                vocab = np.amax(self.y_array) + 1
+                self.vocab_size = vocab
+                stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
+
+        stderr.write("Constructing one-hot vector data...")
+        stderr.flush()
+
+        # Create 3D arrays (# of seqences, seq length, vocab size)
+        x_onehots = np.zeros((len(self.x_array), self.seq_len, vocab))
+        y_onehots = np.zeros((len(self.y_array), self.seq_len, vocab))
+
+        # Get fancy multi-indexer
+        xx, yy = np.ix_(np.arange(len(self.x_array)), np.arange(self.seq_len))
+
+        # Build one-hots in specified indices
+        x_onehots[xx, yy, self.x_array] = 1.0
+        y_onehots[xx, yy, self.y_array] = 1.0
+
+        # Create shared vars
+        self.x_shared = theano.shared(name='x_shared', value=x_onehots)
+        self.y_shared = theano.shared(name='y_shared', value=y_onehots)
+
+        stderr.write("done!\n")
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # References to onehot-encoded shared data
+        # shouldn't be serialized here, so remove them
+        state['x_shared'] = None
+        state['y_shared'] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Rebuild onehot-encoded shared data
+        self._build_onehots()
+
     @staticmethod
-    def loadfromfile(filename):
+    def loadfromfile(filename, charset=None):
         """Loads data set from filename."""
 
         try:
