@@ -711,10 +711,8 @@ class DataSet:
             self.data_len = datalen
 
         # TODO: use eye()/ravel()/reshape() instead, check if faster
-        x_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.x_array.ravel()].reshape(
-            self.x_array.shape[0], self.x_array.shape[1], vocab)
-        y_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.y_array.ravel()].reshape(
-            self.y_array.shape[0], self.y_array.shape[1], vocab)
+        x_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.x_array]
+        y_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.y_array]
 
         '''
         # Create 3D arrays (# of seqences, seq length, vocab size)
