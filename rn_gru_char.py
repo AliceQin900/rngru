@@ -45,7 +45,7 @@ class ModelParams():
         for pos in range(len(X)):
             errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
 
-        return np.sum(errors).item() / float(X.size)
+        return np.sum(errors).item() / float(X.size / X.shape[-1])
 
     def train(self, inputs, outputs, num_examples=0, callback_every=1000, callback=None, init_state=None):
         """Train model on given inputs/outputs for num_examples.
@@ -107,7 +107,7 @@ class ModelParams():
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             len(inputvec), (time2 - time1) * 1000.0))
 
-    def genchars(self, charset, numchars, init_state=None, use_max=False):
+    def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
 
         # Fresh state
@@ -116,14 +116,48 @@ class ModelParams():
         # Seed random character to start
         seedch = charset.randomidx()
 
-        # Get generated sequence
-        if use_max:
-            idxs, end_state = self.gen_chars_max(numchars, seedch, start_state)
-        else:
-            idxs, end_state = self.gen_chars(numchars, seedch, start_state)
+        # Convert to one-hot vector
+        # TODO: move to charset
+        charvec = np.zeros(charset.vocab_size)
+        charvec[seedch] = 1.0
 
-        # Now translate from indicies to characters, and construct string
-        chars = [ charset.charatidx(i) for i in idxs ]
+        seedvec = charvec.astype(theano.config.floatX)
+
+        # Get generated sequence
+        # TODO: have charset able to process arrays
+        # TODO: add in multinomial/choice option instead of just argmax
+        idxs, end_state = self.gen_chars(numchars, seedvec, start_state)
+        chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
+        # Now construct string
+        return charset.charatidx(seedch) + "".join(chars), end_state
+
+    def gencharprobs(self, charset, numchars, init_state=None, use_max=False):
+        """Generate string of characters from current model parameters.
+        Uses probabilities of entire sequence, instead of picking char per step.
+        """
+
+        # Fresh state
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
+
+        # Seed random character to start
+        seedch = charset.randomidx()
+
+        # Convert to one-hot vector
+        # TODO: move to charset
+        charvec = np.zeros(charset.vocab_size)
+        charvec[seedch] = 1.0
+
+        seedvec = charvec.astype(theano.config.floatX)
+
+        # Get generated sequence
+        # TODO: have charset able to process arrays
+        # TODO: add in multinomial/choice option instead of just argmax
+        idxs, end_state = self.gen_char_probs(numchars, seedvec, start_state)
+        if use_max:
+            chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
+        else:
+            chars = [ charset.charatidx(np.random.choice(charset.vocab_size, p=i)) for i in idxs ]
+        # Now construct string
         return charset.charatidx(seedch) + "".join(chars), end_state
 
     # TODO: Non-Theano step function
@@ -142,9 +176,6 @@ class ModelParams():
         pass
 
     def gen_chars(self, *args, **kwargs):
-        pass
-
-    def gen_chars_max(self, *args, **kwargs):
         pass
 
     def predict_prob(self, *args, **kwargs):
@@ -171,7 +202,7 @@ class GRUResize(ModelParams):
         # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
         tE = E if isinstance(E, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (3, hyper.state_size, hyper.vocab_size))
+            (3, hyper.vocab_size, hyper.state_size))
 
         tF = F if isinstance(F, np.ndarray) else np.random.uniform(
             -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
@@ -186,8 +217,8 @@ class GRUResize(ModelParams):
             ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
 
         tV = V if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (hyper.vocab_size, hyper.state_size))
+            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
+            (hyper.state_size, hyper.vocab_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
@@ -229,9 +260,14 @@ class GRUResize(ModelParams):
         """Build Theano graph and define functions."""
 
         # Inputs
-        x = T.ivector('x')
-        y = T.ivector('y')
+        x = T.matrix('x')
+        y = T.matrix('y')
         s_in = T.matrix('s_in')
+
+        # Batch Inputs
+        x_bat = T.tensor3('x_bat')
+        y_bat = T.tensor3('y_bat')
+        s_in_bat = T.tensor3('s_in_bat')
 
         # Constants(ish)
         layers = self.hyper.layers
@@ -240,7 +276,7 @@ class GRUResize(ModelParams):
 
         # Local bindings for convenience
         E, F, U, W, V, a, b, c = self.E, self.F, self.U, self.W, self.V, self.a, self.b, self.c
-        xI = T.eye(vocab_size, vocab_size)
+        #xI = T.eye(vocab_size, vocab_size)
 
         # Forward propagation
         def forward_step(x_t, s_t):
@@ -250,18 +286,21 @@ class GRUResize(ModelParams):
             s_next = T.zeros_like(s_t)
 
             # Not taking shortcut anymore
-            # Create one-hot vector from x_t using column of xI
-            inout = xI[:,x_t]
+            # Assumes x_t is already one-hot vector
+
+            # OLD, IGNORE            
+            # Create one-hot vector from x_t using row of xI
+            # inout = xI[x_t,:]
 
             # Vocab-to-state GRU layer
             # Get previous state for this layer
             s_prev = s_t[0]
             # Update gate
-            z = T.nnet.hard_sigmoid(E[0].dot(inout) + F[0].dot(s_prev) + a[0])
+            z = T.nnet.hard_sigmoid(T.dot(x_t, E[0]) + T.dot(s_prev, F[0]) + a[0])
             # Reset gate
-            r = T.nnet.hard_sigmoid(E[1].dot(inout) + F[1].dot(s_prev) + a[1])
+            r = T.nnet.hard_sigmoid(T.dot(x_t, E[1]) + T.dot(s_prev, F[1]) + a[1])
             # Candidate state
-            h = T.tanh(E[2].dot(inout) + F[2].dot(r * s_prev) + a[2])
+            h = T.tanh(T.dot(x_t, E[2]) + T.dot(r * s_prev, F[2]) + a[2])
             # New state
             s_new = (T.ones_like(z) - z) * h + z * s_prev
             s_next = T.set_subtensor(s_next[0], s_new)
@@ -269,17 +308,17 @@ class GRUResize(ModelParams):
             inout = s_new
 
             # Loop over subsequent GRU layers
-            for layer in range(layers-1):
+            for layer in range(1, layers):
                 # 3 matrices per layer
-                L = layer * 3
+                L = (layer-1) * 3
                 # Get previous state for this layer
                 s_prev = s_t[layer]
                 # Update gate
-                z = T.nnet.hard_sigmoid(U[L].dot(inout) + W[L].dot(s_prev) + b[L])
+                z = T.nnet.hard_sigmoid(T.dot(inout, U[L]) + T.dot(s_prev, W[L]) + b[L])
                 # Reset gate
-                r = T.nnet.hard_sigmoid(U[L+1].dot(inout) + W[L+1].dot(s_prev) + b[L+1])
+                r = T.nnet.hard_sigmoid(T.dot(inout, U[L+1]) + T.dot(s_prev, W[L+1]) + b[L+1])
                 # Candidate state
-                h = T.tanh(U[L+2].dot(inout) + W[L+2].dot(r * s_prev) + b[L+2])
+                h = T.tanh(T.dot(inout, U[L+2]) + T.dot(r * s_prev, W[L+2]) + b[L+2])
                 # New state
                 s_new = (T.ones_like(z) - z) * h + z * s_prev
                 s_next = T.set_subtensor(s_next[layer], s_new)
@@ -288,7 +327,7 @@ class GRUResize(ModelParams):
 
             # Final output
             # Theano's softmax returns matrix, and we just want the column
-            o_t = T.nnet.softmax(V.dot(inout) + c)[0]
+            o_t = T.nnet.softmax(T.dot(inout, V) + c)[0]
             return o_t, s_next
             #o_norm = o_t / T.sum(o_t)
             #return o_norm, s_next
@@ -299,7 +338,9 @@ class GRUResize(ModelParams):
             outputs_info=[None, dict(initial=s_in)])
         s_out = s_seq[-1]
 
-        o_err = T.sum(T.nnet.categorical_crossentropy(o, y))
+        # Costs
+        o_errs = T.nnet.categorical_crossentropy(o, y)
+        o_err = T.sum(o_errs)
         # Should regularize at some point
         cost = o_err
 
@@ -328,6 +369,7 @@ class GRUResize(ModelParams):
         # Assign Theano-constructed functions to instance
 
         # Error
+        self.errs = theano.function([x, y, s_in], [o_errs, s_out])
         self.err = theano.function([x, y, s_in], [cost, s_out])
         # Gradients
         # We'll use this at some point for gradient checking
@@ -356,29 +398,30 @@ class GRUResize(ModelParams):
                 (self.mc, mc)],
             name = 'train_step')
 
-        # Predicted char probabilities (old version, reqires recursive sequence input)
-        self.predict_prob = theano.function([x, s_in], [o, s_out])
-
-        # Generate output sequence based on input char index and state (new version)
-        x_in = T.iscalar('x_in')
+        # Sequence generation
+        x_in = T.vector('x_in')
         k = T.iscalar('k')
+
         rng = T.shared_randomstreams.RandomStreams(seed=int(
             self.V.get_value()[0,0] +
             self.U.get_value()[0,0,0] + 
             self.W.get_value()[0,0,0])) 
 
-        # Sequence generation, probabilistic version
+        # Generate output sequence based on input single onehot and state (new version)
+        # Chooses output chars (onehots) at each step by choice from last step's probabilities
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(size=o_t1.shape, n=1, pvals=o_t1)
+            o_rand = rng.multinomial(n=1, pvals=o_t1, dtype=theano.config.floatX)
+            #o_rand = rng.choice(a=vocab_size, p=o_t1)
+
+            return o_rand, s_t1
 
             # Now find selected index
-            o_idx = T.argmax(o_rand).astype('int32')
-
-            return o_idx, s_t1
+            # o_idx = T.argmax(o_rand).astype('int32')
+            # return o_idx, s_t1
 
         [o_chs, s_chs], genupdate = theano.scan(
             fn=generate_step,
@@ -387,31 +430,34 @@ class GRUResize(ModelParams):
         s_ch = s_chs[-1]
         self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
 
-        # Sequence generation, most-likely (argmax) version
-        def generate_step_max(x_t, s_t):
-            # Do next step
-            o_t1, s_t1 = forward_step(x_t, s_t)
-
-            # Now find selected index
-            o_idx = T.argmax(o_t1).astype('int32')
-
-            return o_idx, s_t1
-
-        [o_chsm, s_chsm], genupdatemax = theano.scan(
-            fn=generate_step_max,
+        # Sequence generation alternative
+        # Returns probability matrix of sequence
+        # No character selected at each step - probabilities fed back in
+        [o_chs, s_chs], genupdate = theano.scan(
+            fn=forward_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             n_steps=k)
-        s_chm = s_chsm[-1]
-        self.gen_chars_max = theano.function([k, x_in, s_in], [o_chsm, s_chm], name='gen_chars_max')
+        s_ch = s_chs[-1]
+        self.gen_char_probs = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_char_probs')
 
+        # Predicted next char probability (old version, reqires sequence input)
+        self.predict_prob = theano.function([x, s_in], [o, s_out])
 
         # Whew, I think we're done!
 
     @classmethod
-    def loadfromfile(cls, infile):
+    def loadfromfile(cls, infile, transpose=False):
         with np.load(infile) as f:
             # Load matrices
             p, E, F, U, W, V, a, b, c = f['p'], f['E'], f['F'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
+
+            # Transpose if requested (to load older models)
+            if transpose:
+                E = E.transpose(0, 2, 1)
+                F = F.transpose(0, 2, 1)
+                U = U.transpose(0, 2, 1)
+                W = W.transpose(0, 2, 1)
+                V = V.transpose(1, 0)
 
             # Extract hyperparams and position
             params = pickle.loads(p.tobytes())
@@ -447,10 +493,13 @@ class GRUResize(ModelParams):
             if isinstance(outfile, str):
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
 
-    def freshstate(self):
-        return np.zeros([self.hyper.layers + 1, self.hyper.state_size], dtype=theano.config.floatX)
+    # TODO: scale state by batch size
+    def freshstate(self, batchsize=1):
+        return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
 
 
+# TODO: change to let CharSet get chars from string, with frequencies and line beginnings
+# TODO: save/load charset in its own file
 class CharSet:
     """Character set with bidirectional mappings."""
 
@@ -499,11 +548,12 @@ class CharSet:
         if not allow_newline:
             forbidden.append(self.idxofchar('\n'))
 
+        # Make sure we don't return an unknown char
         char = self.unknown_idx
         while char in forbidden:
             char = random.randrange(self.vocab_size)
-        return char
 
+        return char
         
 class DataSet:
     """Preprocessed dataset, split into sequences and stored as arrays of character indexes."""
@@ -513,6 +563,7 @@ class DataSet:
     def __init__(self, datastr, charset, seq_len=50, srcinfo=None, savedarrays=None):
         self.datastr = datastr
         self.charinfo = charset.srcinfo
+        self.charsize = charset.vocab_size
         self.seq_len = seq_len
         self.srcinfo = srcinfo
 
@@ -540,39 +591,53 @@ class DataSet:
                     y_sequences.append([ charset.idxofchar(ch) for ch in (datastr[pos+1:] + datastr[:pos+1+seq_len-len(datastr)]) ])
 
             # Encode sequences into arrays for training
-            self.x_array = np.asarray(x_sequences, dtype='int32')
-            self.y_array = np.asarray(y_sequences, dtype='int32')
+            if self.charsize <= 256:
+                usetype = 'int8'
+            else:
+                usetype = 'int32'
+            self.x_array = np.asarray(x_sequences, dtype=usetype)
+            self.y_array = np.asarray(y_sequences, dtype=usetype)
 
             stderr.write("Initialized arrays, x: {0} y: {1}\n".format(repr(self.x_array.shape), repr(self.y_array.shape)))
 
-        # Create Theano shared vars
-        #self._build_onehots(self.vocab_size)
+        self.data_len = len(self.x_array)
+
+        # Create one-hot encodings
+        self.build_onehots()
 
     def build_onehots(self, vocab_size=None):
         """Build one-hot encodings of each sequence."""
 
-        # If we're passed a charset, great - if not, fall back to inferring vocab size
+        # If we're passed a charset size, great - if not, fall back to inferring vocab size
         if vocab_size:
-            self.vocab_size = vocab_size
+            self.charsize = vocab_size
             vocab = vocab_size
         else:
             try:
-                vocab = self.vocab_size
+                vocab = self.charsize
             except AttributeError as e:
-                stderr.write("No vocabulary size found, inferring from dataset...\n")
+                stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
                 vocab = np.amax(self.y_array) + 1
-                self.vocab_size = vocab
+                self.charsize = vocab
                 stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
 
         stderr.write("Constructing one-hot vector data...")
         stderr.flush()
 
+        try:
+            datalen = self.data_len
+        except AttributeError:
+            datalen = len(x_array)
+            self.data_len = datalen
+
+        # TODO: use eye()/ravel()/reshape() instead, check if faster
+
         # Create 3D arrays (# of seqences, seq length, vocab size)
-        x_onehots = np.zeros((len(self.x_array), self.seq_len, vocab))
-        y_onehots = np.zeros((len(self.y_array), self.seq_len, vocab))
+        x_onehots = np.zeros((self.data_len, self.seq_len, vocab))
+        y_onehots = np.zeros((self.data_len, self.seq_len, vocab))
 
         # Get fancy multi-indexer
-        xx, yy = np.ix_(np.arange(len(self.x_array)), np.arange(self.seq_len))
+        xx, yy = np.ix_(np.arange(self.data_len), np.arange(self.seq_len))
 
         # Build one-hots in specified indices
         x_onehots[xx, yy, self.x_array] = 1.0
@@ -599,6 +664,8 @@ class DataSet:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if 'charsize' in state:
+            self.build_onehots()
 
     @staticmethod
     def loadfromfile(filename, charset=None):
@@ -743,6 +810,7 @@ Loss: {5:.4f}
             self.loss))
         
 
+# TODO: allow initialization from already-constructed charset and dataset
 class ModelState:
     """Model state, including hyperparamters, charset, last-loaded 
     checkpoint, dataset, and model parameters.
@@ -752,13 +820,10 @@ class ModelState:
     """
     # Model types
     modeltypes = {
-        'GRUSimple': GRUSimple,
-        'GRUEmbed': GRUDecode,
-        'GRUDecode': GRUDecode,
         'GRUResize': GRUResize
     }
 
-    def __init__(self, chars, curdir, modeltype='GRUSimple', srcinfo=None, cpfile=None, 
+    def __init__(self, chars, curdir, modeltype='GRUResize', srcinfo=None, cpfile=None, 
         cp=None, datafile=None, data=None, modelfile=None, model=None):
         self.chars = chars
         self.curdir = curdir
@@ -793,7 +858,7 @@ class ModelState:
                 self.cpfile = None
 
     @classmethod
-    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUSimple', *, seq_len=100, init_checkpoint=True, **kwargs):
+    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUResize', *, seq_len=100, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
         Creates initial checkpoint after model creation if init_checkpoint is True.
         Additional keyword arguments are passed to HyperParams.
@@ -824,6 +889,7 @@ class ModelState:
         basename = os.path.basename(srcfile)
 
         # Now find character set
+        # TODO: change to let CharSet get chars from string, with frequencies and line beginnings
         charset = CharSet(set(datastr), srcinfo=(basename + "-chars"))
 
         # And set hyperparameters (additional keyword args passed through)
@@ -944,7 +1010,7 @@ class ModelState:
         else:
             return False
 
-    def loadmodel(self, filename=None):
+    def loadmodel(self, filename=None, transpose=False):
         """Attempts to load model parameters first from given file, 
         then from current model file, then from current checkpoint (or file).
         """
@@ -970,14 +1036,14 @@ class ModelState:
 
         # Load model now that filename is established
         useclass = self.modeltypes[self.modeltype]
-        self.model = useclass.loadfromfile(openfile)
+        self.model = useclass.loadfromfile(openfile, transpose=transpose)
         if self.model:
             self.modelfile = openfile
             return True
         else:
             return False
 
-    def restore(self, checkpoint=None):
+    def restore(self, checkpoint=None, transpose=False):
         """Restores dataset and model params from specified checkpoint.
         Defaults to stored checkpoint if none provided.
         """
@@ -1005,7 +1071,7 @@ class ModelState:
         # Load data and model, return True only if both work
         # Passing checkpoint's data/model filenames, overriding 
         # those already stored in model state
-        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile):
+        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile, transpose=transpose):
             return True
         else:
             return False
@@ -1066,8 +1132,8 @@ class ModelState:
         if checkpointdir:
             # Get initial loss estimate
             stderr.write("Calculating initial loss estimate...\n")
-            loss_len = 1000 if len(self.data.x_array) >= 1000 else len(self.data.x_array)
-            loss = self.model.calc_loss(self.data.x_array[:loss_len], self.data.y_array[:loss_len])
+            loss_len = 1000 if len(self.data.x_onehots) >= 1000 else len(self.data.x_onehots)
+            loss = self.model.calc_loss(self.data.x_onehots[:loss_len], self.data.y_onehots[:loss_len])
             stderr.write("Initial loss: {0:.3f}\n".format(loss))
 
             # Take checkpoint
@@ -1106,8 +1172,8 @@ class ModelState:
         for roundnum in range(num_rounds):
             # Train...
             train_state = self.model.train(
-                self.data.x_array, 
-                self.data.y_array,
+                self.data.x_onehots, 
+                self.data.y_onehots,
                 num_examples=train_for,
                 callback=progress,
                 callback_every=print_every,
@@ -1118,8 +1184,8 @@ class ModelState:
 
             # Get wraparound slices of dataset, since calc_loss doesn't update pos
             idxs = range(self.model.pos, self.model.pos + valid_len)
-            x_slice = self.data.x_array.take(idxs, axis=0, mode='wrap')
-            y_slice = self.data.y_array.take(idxs, axis=0, mode='wrap')
+            x_slice = self.data.x_onehots.take(idxs, axis=0, mode='wrap')
+            y_slice = self.data.y_onehots.take(idxs, axis=0, mode='wrap')
 
             loss = self.model.calc_loss(x_slice, y_slice, train_state)
 
