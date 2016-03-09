@@ -257,8 +257,9 @@ class GRUSimple(ModelParams):
             # Final output
             # Theano's softmax returns matrix, and we just want the column
             o_t = T.nnet.softmax(inout)[0]
-            o_norm = o_t / T.sum(o_t)
-            return o_norm, s_next
+            return o_t, s_next
+            #o_norm = o_t / T.sum(o_t)
+            #return o_norm, s_next
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], updates = theano.scan(
@@ -513,8 +514,9 @@ class GRUDecode(ModelParams):
             # Final output
             # Theano's softmax returns matrix, and we just want the column
             o_t = T.nnet.softmax(V.T.dot(inout) + c)[0]
-            o_norm = o_t / T.sum(o_t)
-            return o_norm, s_next
+            return o_t, s_next
+            #o_norm = o_t / T.sum(o_t)
+            #return o_norm, s_next
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], updates = theano.scan(
@@ -800,8 +802,9 @@ class GRUResize(ModelParams):
             # Final output
             # Theano's softmax returns matrix, and we just want the column
             o_t = T.nnet.softmax(V.dot(inout) + c)[0]
-            o_norm = o_t / T.sum(o_t)
-            return o_norm, s_next
+            return o_t, s_next
+            #o_norm = o_t / T.sum(o_t)
+            #return o_norm, s_next
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], updates = theano.scan(
@@ -1023,7 +1026,6 @@ class DataSet:
     def __init__(self, datastr, charset, seq_len=50, srcinfo=None, savedarrays=None):
         self.datastr = datastr
         self.charinfo = charset.srcinfo
-        self.vocab_size = charset.vocab_size
         self.seq_len = seq_len
         self.srcinfo = srcinfo
 
@@ -1059,10 +1061,8 @@ class DataSet:
         # Create Theano shared vars
         #self._build_onehots(self.vocab_size)
 
-    def _build_onehots(self, vocab_size=None):
-        """Build one-hot encodings of each sequence and store as
-        Theano shared variables.
-        """
+    def build_onehots(self, vocab_size=None):
+        """Build one-hot encodings of each sequence."""
 
         # If we're passed a charset, great - if not, fall back to inferring vocab size
         if vocab_size:
@@ -1092,8 +1092,11 @@ class DataSet:
         y_onehots[xx, yy, self.y_array] = 1.0
 
         # Create shared vars
-        self.x_onehots = theano.shared(name='x_onehots', value=x_onehots)
-        self.y_onehots = theano.shared(name='y_onehots', value=y_onehots)
+        # These can be large, so we don't necessarily want them on the GPU
+        # self.x_onehots = theano.shared(name='x_onehots', value=x_onehots)
+        # self.y_onehots = theano.shared(name='y_onehots', value=y_onehots)
+        self.x_onehots = x_onehots.astype(theano.config.floatX)
+        self.y_onehots = y_onehots.astype(theano.config.floatX)
 
         stderr.write("done!\n")
 
@@ -1181,10 +1184,10 @@ class Checkpoint:
 
         # Determine filenames
         modeldatetime = datetime.datetime.now(datetime.timezone.utc)
-        basefilename = modeldatetime.strftime("%Y-%m-%d-%H:%M:%S-UTC")
+        basefilename = modeldatetime.strftime("%Y-%m-%d-%H:%M:%S-UTC-{0:.3f}-model".format(loss))
 
         # Save model file
-        modelfilename = os.path.join(savedir, basefilename + "-model.npz")
+        modelfilename = os.path.join(savedir, basefilename + ".npz")
         try:
             modelfile = open(modelfilename, 'wb')
         except OSError as e:
@@ -1196,7 +1199,7 @@ class Checkpoint:
 
             # Create checkpoint
             cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss)
-            cpfilename = os.path.join(savedir, basefilename + "-model.p")
+            cpfilename = os.path.join(savedir, basefilename + ".p".format(loss))
 
             # Save checkpoint
             try:
