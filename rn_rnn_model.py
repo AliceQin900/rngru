@@ -139,8 +139,9 @@ class ModelParams:
         """Generate string of characters from current model parameters.
 
         If use_max is True, will select most-likely character at each step.
-        Probabilities can be optionally scaled by temperature during generation 
-        if use_max=False.
+        
+        Probabilities can be optionally scaled by temperature during generation
+        if use_max=False. 
         """
 
         # Fresh state
@@ -151,10 +152,7 @@ class ModelParams:
 
         # Get generated sequence
         if use_max:
-            if temperature > 0.0:
-                idxs, end_state = self.gen_chars_max_temp(numchars - 1, seedvec, start_state, temperature)
-            else:
-                idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
+            idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
         else:
             if temperature > 0.0:
                 idxs, end_state = self.gen_chars_temp(numchars - 1, seedvec, start_state, temperature)

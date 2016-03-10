@@ -301,6 +301,7 @@ class GRUResize(ModelParams):
 
         x_in = T.vector('x_in')
         k = T.iscalar('k')
+        temperature = T.scalar('temperature')
 
         rng = T.shared_randomstreams.RandomStreams(seed=int(
             np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
@@ -315,9 +316,6 @@ class GRUResize(ModelParams):
             name='_single_step')
 
         '''
-        # Generate output sequence based on input single onehot and given state
-        # Chooses output char by multinomial, and feeds back in for next step
-        # Returns matrix of one-hot vectors
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
@@ -330,7 +328,6 @@ class GRUResize(ModelParams):
         [o_chs, s_chs], genupdate = th.scan(
             fn=generate_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
-            non_sequences=temperature,
             n_steps=k)
         s_ch = s_chs[-1]
 
@@ -354,18 +351,18 @@ class GRUResize(ModelParams):
 
             return o_rand, s_t1
 
-        temperature = T.scalar('temperature')
-        [o_chps, s_chps], _ = th.scan(
+        [o_chps, s_chps], genupdatetmp = th.scan(
             fn=generate_step_temp,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             non_sequences=temperature,
             n_steps=k)
         s_chp = s_chps[-1]
 
-        self.gen_char_temp = th.function(
-            inputs=[k, x_in, s_in, th.Param(temperature, default=1.0)], 
+        self.gen_chars_temp = th.function(
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.05)], 
             outputs=[o_chps, s_chp], 
-            name='gen_char_temp')
+            name='gen_chars_temp',
+            updates=genupdatetmp)
 
         # Chooses output char by argmax, and feeds back in
         def generate_step_max(x_t, s_t):
@@ -391,35 +388,6 @@ class GRUResize(ModelParams):
             inputs=[k, x_in, s_in], 
             outputs=[o_chms, s_chm], 
             name='gen_chars_max')
-
-        # As above, but with temperature
-        def generate_step_max_temp(x_t, s_t, temp):
-            # Do next step
-            o_t1, s_t1 = forward_step(x_t, s_t)
-
-            # Scale by temperature
-            o_t2 = T.exp(o_t1[-1] / temp)
-            o_ts = o_t2 / T.sum(o_t2)
-
-            # Now find selected index
-            o_idx = T.argmax(o_ts)
-
-            # Create one-hot
-            o_ret = T.zeros_like(o_ts)
-            o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
-
-            return o_ret, s_t1
-
-        [o_chms, s_chms], _ = th.scan(
-            fn=generate_step_max_temp,
-            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
-            n_steps=k)
-        s_chm = s_chms[-1]
-
-        self.gen_chars_max_temp = th.function(
-            inputs=[k, x_in, s_in, th.Param(temperature, default=1.0)], 
-            outputs=[o_chms, s_chm], 
-            name='gen_chars_max_temp')
 
         # Sequence generation alternative
         # Predicted next char probability 
