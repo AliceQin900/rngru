@@ -12,7 +12,7 @@ import theano.tensor as T
 class HyperParams:
     """Hyperparameters for GRU setup."""
 
-    def __init__(self, vocab_size, state_size=128, layers=1, bptt_truncate=-1, learnrate=0.001, decay=0.9):
+    def __init__(self, vocab_size, state_size=128, layers=1, bptt_truncate=-1, learnrate=0.001, decay=0.95):
         self.vocab_size = vocab_size
         self.state_size = state_size
         self.layers = layers
@@ -409,7 +409,7 @@ class GRUResize(ModelParams):
 
         # Training step function
         self.train_step = theano.function(
-            [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
+            [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.95)],
             s_out,
             updates=[
                 (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
@@ -477,7 +477,7 @@ class GRUResize(ModelParams):
 
         # Batch training step function
         self.train_step_bat = theano.function(
-            [x_bat, y_bat, s_in_bat, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.9)],
+            [x_bat, y_bat, s_in_bat, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.95)],
             s_out_bat,
             updates=[
                 (E, E - learnrate * dE_bat / T.sqrt(mE_bat + 1e-6)),
