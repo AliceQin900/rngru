@@ -87,6 +87,9 @@ class ModelParams():
             if self.pos >= input_len:
                 self.epoch += 1
                 self.pos = 0
+                if batchsize > 0:
+                    # Roll state vector on batch axis, to keep continuity
+                    step_state = np.roll(step_state, 1, axis=1)
 
             # Optional callback
             if callback and callback_every and (train_pos + 1) % callback_every == 0:
