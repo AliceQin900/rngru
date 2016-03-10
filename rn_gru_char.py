@@ -1305,6 +1305,8 @@ class ModelState:
         else:
             progress(self.model, train_state)
 
+        time1 = time.time()
+
         # Train for num_rounds
         for roundnum in range(num_rounds):
             # Train...
@@ -1350,7 +1352,11 @@ class ModelState:
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
 
+        time2 = time.time()
+        timetaken = (time2 - time1) * 1e6
+
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
+        stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
 
 
 # Unattached functions
