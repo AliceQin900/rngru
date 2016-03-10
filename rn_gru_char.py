@@ -47,7 +47,9 @@ class ModelParams():
         for pos in range(len(X)):
             errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
 
-        return np.sum(errors).item() / float(X.size / X.shape[-1])
+        # Return total loss divided by number of characters in sample
+        # (w/extra term to avoid div by 0)
+        return np.sum(errors).item() / float(X.shape[0] * X.shape[1] + 1e-8)
 
     def train(self, dataset, batchsize=0, num_examples=1000, callback_every=1000, callback=None, init_state=None):
         """Train model on given dataset for num_examples, with optional 
@@ -61,7 +63,7 @@ class ModelParams():
 
         If num_examples is 0, will train for full epoch.
         """
-        input_len = dataset.batchepoch(batchsize) if batchsize > 0 else dataset.dataset_len
+        input_len = dataset.batchepoch(batchsize) if batchsize > 0 else dataset.data_len
         train_len = num_examples if num_examples else input_len
 
         # Start with fresh state if none provided
@@ -90,6 +92,8 @@ class ModelParams():
                 if batchsize > 0:
                     # Roll state vector on batch axis, to keep continuity
                     step_state = np.roll(step_state, 1, axis=1)
+                else:
+                    step_state = self.freshstate(batchsize)
 
             # Optional callback
             if callback and callback_every and (train_pos + 1) % callback_every == 0:
@@ -287,7 +291,7 @@ class GRUResize(ModelParams):
         time1 = time.time()
         self.__build_t__()
         time2 = time.time()
-        stdout.write("done!\nCompilation took {0:.3f} ms.\n".format((time2 - time1) * 1000.0))
+        stdout.write("done!\nCompilation took {0:.3f} s.\n".format(time2 - time1))
         stdout.flush()
 
     def __build_t__(self):
@@ -1294,7 +1298,8 @@ class ModelState:
         # Get max length
         datalen = self.data.batchepoch(batchsize) if batchsize > 0 else self.data.data_len
         train_for = train_len if train_len else datalen
-        valid_for = valid_len if valid_len else datalen
+        # Validation isn't batched, so use full data range if nothing passed
+        valid_for = valid_len if valid_len else self.data.data_len
 
         # Start with a blank state
         train_state = self.model.freshstate(batchsize)
@@ -1340,10 +1345,10 @@ class ModelState:
                 self.model.hyper.learnrate *= 0.5
                 stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
-            elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.99:
+            elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.97:
                 # Loss not decreasing enough, raise learning rate
-                self.model.hyper.learnrate *= 1.2
-                stderr.write("Loss decreased too little between validations, adjusted learning rate to {0:.6f}\n".format(
+                self.model.hyper.learnrate *= 0.9
+                stderr.write("Loss changed too little between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
 
             stderr.write("\n--------\n\n")
@@ -1353,7 +1358,7 @@ class ModelState:
             self.cp.printstats(stdout)
 
         time2 = time.time()
-        timetaken = (time2 - time1) * 1e6
+        timetaken = time2 - time1
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
