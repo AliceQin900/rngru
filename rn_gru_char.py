@@ -3,10 +3,8 @@
 import os, datetime, pickle, random, time
 from sys import stdin, stdout, stderr
 import numpy as np
-import theano
+import theano as th
 import theano.tensor as T
-
-#theano.config.exception_verbosity='high'
 
 
 class HyperParams:
@@ -265,24 +263,24 @@ class GRUResize(ModelParams):
         tc = c if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
 
         # Shared variables
-        self.E = theano.shared(name='E', value=tE.astype(theano.config.floatX))
-        self.F = theano.shared(name='F', value=tF.astype(theano.config.floatX))
-        self.U = theano.shared(name='U', value=tU.astype(theano.config.floatX))
-        self.W = theano.shared(name='W', value=tW.astype(theano.config.floatX))
-        self.V = theano.shared(name='V', value=tV.astype(theano.config.floatX))
-        self.a = theano.shared(name='a', value=ta.astype(theano.config.floatX))
-        self.b = theano.shared(name='b', value=tb.astype(theano.config.floatX))
-        self.c = theano.shared(name='c', value=tc.astype(theano.config.floatX))
+        self.E = th.shared(name='E', value=tE.astype(th.config.floatX))
+        self.F = th.shared(name='F', value=tF.astype(th.config.floatX))
+        self.U = th.shared(name='U', value=tU.astype(th.config.floatX))
+        self.W = th.shared(name='W', value=tW.astype(th.config.floatX))
+        self.V = th.shared(name='V', value=tV.astype(th.config.floatX))
+        self.a = th.shared(name='a', value=ta.astype(th.config.floatX))
+        self.b = th.shared(name='b', value=tb.astype(th.config.floatX))
+        self.c = th.shared(name='c', value=tc.astype(th.config.floatX))
 
         # rmsprop parameters
-        self.mE = theano.shared(name='mE', value=np.zeros_like(tE).astype(theano.config.floatX))
-        self.mF = theano.shared(name='mF', value=np.zeros_like(tF).astype(theano.config.floatX))
-        self.mU = theano.shared(name='mU', value=np.zeros_like(tU).astype(theano.config.floatX))
-        self.mW = theano.shared(name='mW', value=np.zeros_like(tW).astype(theano.config.floatX))
-        self.mV = theano.shared(name='mV', value=np.zeros_like(tV).astype(theano.config.floatX))
-        self.ma = theano.shared(name='ma', value=np.zeros_like(ta).astype(theano.config.floatX))
-        self.mb = theano.shared(name='mb', value=np.zeros_like(tb).astype(theano.config.floatX))
-        self.mc = theano.shared(name='mc', value=np.zeros_like(tc).astype(theano.config.floatX))
+        self.mE = th.shared(name='mE', value=np.zeros_like(tE).astype(th.config.floatX))
+        self.mF = th.shared(name='mF', value=np.zeros_like(tF).astype(th.config.floatX))
+        self.mU = th.shared(name='mU', value=np.zeros_like(tU).astype(th.config.floatX))
+        self.mW = th.shared(name='mW', value=np.zeros_like(tW).astype(th.config.floatX))
+        self.mV = th.shared(name='mV', value=np.zeros_like(tV).astype(th.config.floatX))
+        self.ma = th.shared(name='ma', value=np.zeros_like(ta).astype(th.config.floatX))
+        self.mb = th.shared(name='mb', value=np.zeros_like(tb).astype(th.config.floatX))
+        self.mc = th.shared(name='mc', value=np.zeros_like(tc).astype(th.config.floatX))
 
         # Build Theano graph and add related attributes
         self.theano = {}
@@ -310,14 +308,14 @@ class GRUResize(ModelParams):
             """Input vector/matrix x(t) and state matrix s(t)."""
 
             # Gradient clipping
-            E_c = theano.gradient.grad_clip(E, -2.0, 2.0)
-            F_c = theano.gradient.grad_clip(F, -2.0, 2.0)
-            U_c = theano.gradient.grad_clip(U, -2.0, 2.0)
-            W_c = theano.gradient.grad_clip(W, -2.0, 2.0)
-            V_c = theano.gradient.grad_clip(V, -2.0, 2.0)
-            a_c = theano.gradient.grad_clip(a, -2.0, 2.0)
-            b_c = theano.gradient.grad_clip(b, -2.0, 2.0)
-            c_c = theano.gradient.grad_clip(c, -2.0, 2.0)
+            E_c = th.gradient.grad_clip(E, -2.0, 2.0)
+            F_c = th.gradient.grad_clip(F, -2.0, 2.0)
+            U_c = th.gradient.grad_clip(U, -2.0, 2.0)
+            W_c = th.gradient.grad_clip(W, -2.0, 2.0)
+            V_c = th.gradient.grad_clip(V, -2.0, 2.0)
+            a_c = th.gradient.grad_clip(a, -2.0, 2.0)
+            b_c = th.gradient.grad_clip(b, -2.0, 2.0)
+            c_c = th.gradient.grad_clip(c, -2.0, 2.0)
 
             # Initialize state to return
             s_next = T.zeros_like(s_t)
@@ -373,7 +371,7 @@ class GRUResize(ModelParams):
             return o_p[-1], s_p
 
         # Now get Theano to do the heavy lifting
-        [o, s_seq], _ = theano.scan(
+        [o, s_seq], _ = th.scan(
             single_step, 
             sequences=x, 
             truncate_gradient=self.hyper.bptt_truncate,
@@ -409,8 +407,8 @@ class GRUResize(ModelParams):
         mc = decayrate * self.mc + (1 - decayrate) * dc ** 2
 
         # Training step function
-        self.train_step = theano.function(
-            [x, y, s_in, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.95)],
+        self.train_step = th.function(
+            [x, y, s_in, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
             s_out,
             updates=[
                 (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
@@ -440,7 +438,7 @@ class GRUResize(ModelParams):
         s_in_bat = T.tensor3('s_in_bat')
 
         # We can use the whole matrix from softmax for batches
-        [o_bat, s_seq_bat], _ = theano.scan(
+        [o_bat, s_seq_bat], _ = th.scan(
             forward_step, 
             sequences=x_bat, 
             truncate_gradient=self.hyper.bptt_truncate,
@@ -477,8 +475,8 @@ class GRUResize(ModelParams):
         mc_bat = decayrate * self.mc + (1 - decayrate) * dc_bat ** 2
 
         # Batch training step function
-        self.train_step_bat = theano.function(
-            [x_bat, y_bat, s_in_bat, theano.Param(learnrate, default=0.001), theano.Param(decayrate, default=0.95)],
+        self.train_step_bat = th.function(
+            [x_bat, y_bat, s_in_bat, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
             s_out_bat,
             updates=[
                 (E, E - learnrate * dE_bat / T.sqrt(mE_bat + 1e-6)),
@@ -503,12 +501,12 @@ class GRUResize(ModelParams):
         ### ERROR CHECKING ###
 
         # Error
-        self.errs = theano.function([x, y, s_in], [o_errs, s_out])
-        self.err = theano.function([x, y, s_in], [cost, s_out])
+        self.errs = th.function([x, y, s_in], [o_errs, s_out])
+        self.err = th.function([x, y, s_in], [cost, s_out])
 
         # Gradients
         # We'll use this at some point for gradient checking
-        self.grad = theano.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
+        self.grad = th.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
 
 
         ### SEQUENCE GENERATION ###
@@ -523,7 +521,7 @@ class GRUResize(ModelParams):
         '''
         # For debug
         o_p1, s_p1 = forward_step(x_in, s_in)
-        self._single_step = theano.function(
+        self._single_step = th.function(
             inputs=[x_in, s_in], 
             outputs=[o_p1, s_p1],
             name='_single_step')
@@ -536,7 +534,7 @@ class GRUResize(ModelParams):
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t1[-1], dtype=theano.config.floatX)
+            o_rand = rng.multinomial(n=1, pvals=o_t1[-1], dtype=th.config.floatX)
             #o_rand = rng.choice(a=vocab_size, p=o_t1)
 
             return o_rand, s_t1
@@ -545,26 +543,26 @@ class GRUResize(ModelParams):
             # o_idx = T.argmax(o_rand).astype('int32')
             # return o_idx, s_t1
 
-        [o_chs, s_chs], genupdate = theano.scan(
+        [o_chs, s_chs], genupdate = th.scan(
             fn=generate_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             n_steps=k)
         s_ch = s_chs[-1]
-        self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
+        self.gen_chars = th.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
 
         # As above, but no character selected at each step - probabilities fed back in
-        [o_chps, s_chps], _ = theano.scan(
+        [o_chps, s_chps], _ = th.scan(
             fn=single_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             n_steps=k)
         s_chp = s_chps[-1]
-        self.gen_char_probs = theano.function([k, x_in, s_in], [o_chps, s_chp], name='gen_char_probs')
+        self.gen_char_probs = th.function([k, x_in, s_in], [o_chps, s_chp], name='gen_char_probs')
 
         # Sequence generation alternative
         # Predicted next char probability 
         # (reqires recursive input to generate sequence)
         o_next = o[-1]
-        self.predict_prob = theano.function([x, s_in], [o_next, s_out])
+        self.predict_prob = th.function([x, s_in], [o_next, s_out])
 
         ### Whew, I think we're done! ###
 
@@ -611,9 +609,9 @@ class GRUResize(ModelParams):
     # TODO: scale state by batch size
     def freshstate(self, batchsize=0):
         if batchsize > 0:
-            return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=theano.config.floatX)
+            return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
         else:
-            return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=theano.config.floatX)
+            return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
 
 
 # TODO: change to let CharSet get chars from string, with frequencies and line beginnings
@@ -675,7 +673,7 @@ class CharSet:
 
     def randomonehot(self, allow_newline=False):
         '''Returns one-hot vector of random character index.'''
-        vec = np.zeros(self.vocab_size, dtype=theano.config.floatX)
+        vec = np.zeros(self.vocab_size, dtype=th.config.floatX)
         vec[self.randomidx()] = 1.0
         return vec
         
@@ -757,13 +755,13 @@ class DataSet:
         time1 = time.time()
 
         # numpy fancy indexing is fun!
-        x_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.x_array]
-        y_onehots = np.eye(vocab, dtype=theano.config.floatX)[self.y_array]
+        x_onehots = np.eye(vocab, dtype=th.config.floatX)[self.x_array]
+        y_onehots = np.eye(vocab, dtype=th.config.floatX)[self.y_array]
 
         # These can be large, so we don't necessarily want them on the GPU
         # Thus they're not Theano shared vars
-        self.x_onehots = x_onehots #.astype(theano.config.floatX)
-        self.y_onehots = y_onehots #.astype(theano.config.floatX)
+        self.x_onehots = x_onehots #.astype(th.config.floatX)
+        self.y_onehots = y_onehots #.astype(th.config.floatX)
 
         time2 = time.time()
 
