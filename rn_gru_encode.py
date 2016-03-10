@@ -14,7 +14,7 @@ class GRUEncode(ModelParams):
     of hidden layers.
 
     Each hidden layer has weight matrices U and W with bias vector b.
-    
+
     Softmax applied to final output.
     """
 
@@ -106,7 +106,7 @@ class GRUEncode(ModelParams):
             # Loop over GRU layers
             for layer in range(layers):
                 # 3 matrices per layer
-                L = (layer) * 3
+                L = layer * 3
                 # Get previous state for this layer
                 s_prev = s_t[layer]
                 # Update gate
