@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
-
 # Python module dependencies
 import time
 from sys import stdin, stdout, stderr
 import numpy as np
 
-class ModelParams():
+class ModelParams:
     """Base class for RNN variants.
     NOTE: Not intended to be instantiated!
     """
@@ -137,9 +135,12 @@ class ModelParams():
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             intensor.shape[0], (time2 - time1) * 1000.0))
 
-    # Older version, now redundant
-    def genchars(self, charset, numchars, init_state=None):
-        """Generate string of characters from current model parameters."""
+    def genchars(self, charset, numchars, init_state=None, use_max=False, temperature=0.5):
+        """Generate string of characters from current model parameters.
+
+        If use_max is True, will select most-likely character at each step.
+        Probabilities scaled by temperature during generation if use_max=False (default).
+        """
 
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
@@ -148,15 +149,22 @@ class ModelParams():
         seedvec = charset.randomonehot()
 
         # Get generated sequence
-        idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state)
+        if use_max:
+            idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
+        else:
+            idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state, temperature)
         chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
 
         # Now construct string
         return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
 
-    def genchar_probs(self, charset, numchars, init_state=None, use_max=False):
+    def gencharprobs(self, charset, numchars, init_state=None, use_max=False, temperature=0.5):
         """Generate string of characters from current model parameters.
-        Returns probabilities of entire sequence, instead of picking char per step and
+
+        If use_max is True, will select most-likely character at each step.
+        Probabilities scaled by temperature during generation.
+
+        Gets probabilities of entire sequence, instead of picking char per step and
         feeding back in.
         """
 
@@ -167,7 +175,7 @@ class ModelParams():
         seedvec = charset.randomonehot()
 
         # Get generated sequence
-        idxs, end_state = self.gen_char_probs(numchars - 1, seedvec, start_state)
+        idxs, end_state = self.gen_char_probs(numchars - 1, seedvec, start_state, temperature)
 
         # Choose characters according to probabilities
         if use_max:
@@ -200,5 +208,6 @@ class ModelParams():
         pass
     def gen_char_probs(self, *args, **kwargs):
         pass
-    def predict_prob(self, *args, **kwargs):
+    def gen_chars_max(self, *args, **kwargs):
         pass
+

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import datetime, pickle, random, time
 from sys import stdin, stdout, stderr
 import numpy as np
@@ -303,6 +301,7 @@ class GRUResize(ModelParams):
 
         x_in = T.vector('x_in')
         k = T.iscalar('k')
+        temperature = T.scalar('temperature')
 
         rng = T.shared_randomstreams.RandomStreams(seed=int(
             np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
@@ -318,41 +317,89 @@ class GRUResize(ModelParams):
 
         '''
         # Generate output sequence based on input single onehot and state (new version)
-        # Returns probability matrix of sequence
-        def generate_step(x_t, s_t):
+        # Chooses output char by multinomial (scaled by temperature), and feeds back in
+        # Returns matrix of one-hot vectors
+        def generate_step(x_t, s_t, temp):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
+            # Scale by temperature
+            o_t2 = o_t1[-1] / temp
+            o_ts = o_t2 / T.sum(o_t2)
+
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t1[-1], dtype=th.config.floatX)
-            #o_rand = rng.choice(a=vocab_size, p=o_t1)
+            o_rand = rng.multinomial(n=1, pvals=o_ts, dtype=th.config.floatX)
 
             return o_rand, s_t1
-
-            # Now find selected index
-            # o_idx = T.argmax(o_rand).astype('int32')
-            # return o_idx, s_t1
 
         [o_chs, s_chs], genupdate = th.scan(
             fn=generate_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            non_sequences=temperature,
             n_steps=k)
         s_ch = s_chs[-1]
-        self.gen_chars = th.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
+
+        self.gen_chars = th.function(
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.5)], 
+            outputs=[o_chs, s_ch], 
+            name='gen_chars', 
+            updates=genupdate)
 
         # As above, but no character selected at each step - probabilities fed back in
+        # Returns matrix of probabilities along sequence
+        def generate_step_prob(x_t, s_t, temp):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Scale by temperature
+            o_t2 = o_t1[-1] / temp
+            o_ts = o_t2 / T.sum(o_t2)
+
+            return o_ts, s_t1
+
         [o_chps, s_chps], _ = th.scan(
-            fn=single_step,
+            fn=generate_step_prob,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            non_sequences=temperature,
             n_steps=k)
         s_chp = s_chps[-1]
-        self.gen_char_probs = th.function([k, x_in, s_in], [o_chps, s_chp], name='gen_char_probs')
+
+        self.gen_char_probs = th.function(
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.5)], 
+            outputs=[o_chps, s_chp], 
+            name='gen_char_probs')
+
+        # Chooses output char by argmax, and feeds back in
+        # Returns matrix of one-hot vectors
+        def generate_step_max(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Now find selected index
+            o_idx = T.argmax(o_t1[-1])
+
+            # Create one-hot
+            o_ret = T.zeros_like(o_t1[-1])
+            o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
+
+            return o_ret, s_t1
+
+        [o_chms, s_chms], _ = th.scan(
+            fn=generate_step_max,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_chm = s_chms[-1]
+
+        self.gen_chars_max = th.function(
+            inputs=[k, x_in, s_in], 
+            outputs=[o_chms, s_chm], 
+            name='gen_chars_max')
 
         # Sequence generation alternative
         # Predicted next char probability 
         # (reqires recursive input to generate sequence)
-        o_next = o[-1]
-        self.predict_prob = th.function([x, s_in], [o_next, s_out])
+        #o_next = o[-1]
+        #self.predict_prob = th.function([x, s_in], [o_next, s_out])
 
         ### Whew, I think we're done! ###
 

@@ -474,7 +474,7 @@ class ModelState:
     def loadfromfile(filename):
         """Loads model state from filename.
         Note: dataset and model params can be restored from last checkpoint
-        after loading model state using restorefrom().
+        after loading model state using restore().
         """
 
         try:
