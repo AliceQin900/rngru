@@ -164,7 +164,7 @@ class ModelParams():
         seedvec = charset.randomonehot()
 
         # Get generated sequence
-        idxs, end_state = self.gen_chars(numchars, seedvec, start_state)
+        idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state)
         chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
 
         # Now construct string
@@ -172,7 +172,8 @@ class ModelParams():
 
     def genchar_probs(self, charset, numchars, init_state=None, use_max=False):
         """Generate string of characters from current model parameters.
-        Uses probabilities of entire sequence, instead of picking char per step.
+        Returns probabilities of entire sequence, instead of picking char per step and
+        feeding back in.
         """
 
         # Fresh state
