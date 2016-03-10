@@ -96,14 +96,14 @@ class GRUResize(ModelParams):
             """Input vector/matrix x(t) and state matrix s(t)."""
 
             # Gradient clipping
-            E_c = th.gradient.grad_clip(E, -2.0, 2.0)
-            F_c = th.gradient.grad_clip(F, -2.0, 2.0)
-            U_c = th.gradient.grad_clip(U, -2.0, 2.0)
-            W_c = th.gradient.grad_clip(W, -2.0, 2.0)
-            V_c = th.gradient.grad_clip(V, -2.0, 2.0)
-            a_c = th.gradient.grad_clip(a, -2.0, 2.0)
-            b_c = th.gradient.grad_clip(b, -2.0, 2.0)
-            c_c = th.gradient.grad_clip(c, -2.0, 2.0)
+            E_c = th.gradient.grad_clip(E, -5.0, 5.0)
+            F_c = th.gradient.grad_clip(F, -5.0, 5.0)
+            U_c = th.gradient.grad_clip(U, -5.0, 5.0)
+            W_c = th.gradient.grad_clip(W, -5.0, 5.0)
+            V_c = th.gradient.grad_clip(V, -5.0, 5.0)
+            a_c = th.gradient.grad_clip(a, -5.0, 5.0)
+            b_c = th.gradient.grad_clip(b, -5.0, 5.0)
+            c_c = th.gradient.grad_clip(c, -5.0, 5.0)
 
             # Initialize state to return
             s_next = T.zeros_like(s_t)
