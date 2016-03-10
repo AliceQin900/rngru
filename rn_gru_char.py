@@ -1333,7 +1333,8 @@ class ModelState:
                 init_state=train_state)
 
             # Calc loss
-            stderr.write("--------\n\nCalculating loss...\n")
+            stderr.write("--------\n\nCalculating loss (epoch {0:d}, pos {1:d})...\n".format(
+                self.model.epoch, self.model.pos))
             stderr.flush()
 
             # Get wraparound slices of dataset, since calc_loss doesn't update pos
