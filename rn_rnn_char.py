@@ -8,7 +8,8 @@ import theano as th
 import theano.tensor as T
 
 # Other files in this module
-from rn_gru_char import GRUResize
+from rn_gru_resize import GRUResize
+from rn_gru_encode import GRUEncode
 
 
 class HyperParams:
@@ -373,7 +374,8 @@ class ModelState:
     """
     # Model types
     modeltypes = {
-        'GRUResize': GRUResize
+        'GRUResize': GRUResize,
+        'GRUEncode': GRUEncode
     }
 
     def __init__(self, chars, curdir, modeltype='GRUResize', srcinfo=None, cpfile=None, 
