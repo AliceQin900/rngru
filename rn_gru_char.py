@@ -1353,10 +1353,13 @@ class ModelState:
                 stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
             elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.97:
-                # Loss not decreasing enough, raise learning rate
-                self.model.hyper.learnrate *= 0.9
-                stderr.write("Loss changed too little between validations, adjusted learning rate to {0:.6f}\n".format(
-                    self.model.hyper.learnrate))
+                # Loss not decreasing fast enough, raise decay rate
+                self.model.hyper.decay = (1.0 + self.model.hyper.decay) / 2.0
+                # Just in case (shouldn't happen, but you know floating points...)
+                if self.model.hyper.decay >= 1.0:
+                    self.model.hyper.decay = 1.0 - 1e-6
+                stderr.write("Loss changed too little between validations, adjusted decay rate to {0:.6f}\n".format(
+                    self.model.hyper.decay))
 
             stderr.write("\n--------\n\n")
 
