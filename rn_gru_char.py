@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-import os, datetime, pickle, random, time
+import datetime, pickle, random, time
 from sys import stdin, stdout, stderr
 import numpy as np
 import theano as th
 import theano.tensor as T
+
+from rn_rnn_model import ModelParams
 
 # TODO: add dropout between layers, *proper* embedding layer hooks
 # TODO: make scaffolding for context windows (might need to involve charset)
