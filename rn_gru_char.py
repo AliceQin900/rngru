@@ -1382,7 +1382,8 @@ def printprogress(charset):
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
         print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
-        genstr, _ = model.genchars(charset, 100, init_state=init_state)
+        #genstr, _ = model.genchars(charset, 100, init_state=init_state)
+        genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
     return retfunc
 
