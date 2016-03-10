@@ -296,7 +296,7 @@ class GRUEncode(ModelParams):
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Scale by temperature
-            o_t2 = o_t1[-1] / temp
+            o_t2 = T.exp(o_t1[-1] / temp)
             o_ts = o_t2 / T.sum(o_t2)
 
             # Randomly choose by multinomial distribution
@@ -324,7 +324,7 @@ class GRUEncode(ModelParams):
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Scale by temperature
-            o_t2 = o_t1[-1] / temp
+            o_t2 = T.exp(o_t1[-1] / temp)
             o_ts = o_t2 / T.sum(o_t2)
 
             return o_ts, s_t1
