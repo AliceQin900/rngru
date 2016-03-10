@@ -135,11 +135,12 @@ class ModelParams:
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             intensor.shape[0], (time2 - time1) * 1000.0))
 
-    def genchars(self, charset, numchars, init_state=None, use_max=False, temperature=0.5):
+    def genchars(self, charset, numchars, init_state=None, use_max=False, temperature=0.0):
         """Generate string of characters from current model parameters.
 
         If use_max is True, will select most-likely character at each step.
-        Probabilities scaled by temperature during generation if use_max=False (default).
+        Probabilities can be optionally scaled by temperature during generation 
+        if use_max=False.
         """
 
         # Fresh state
@@ -150,38 +151,18 @@ class ModelParams:
 
         # Get generated sequence
         if use_max:
-            idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
+            if temperature > 0.0:
+                idxs, end_state = self.gen_chars_max_temp(numchars - 1, seedvec, start_state, temperature)
+            else:
+                idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
         else:
-            idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state, temperature)
+            if temperature > 0.0:
+                idxs, end_state = self.gen_chars_temp(numchars - 1, seedvec, start_state, temperature)
+            else:
+                idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state)
+
+        # Convert to characters
         chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
-
-        # Now construct string
-        return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
-
-    def gencharprobs(self, charset, numchars, init_state=None, use_max=False, temperature=0.5):
-        """Generate string of characters from current model parameters.
-
-        If use_max is True, will select most-likely character at each step.
-        Probabilities scaled by temperature during generation.
-
-        Gets probabilities of entire sequence, instead of picking char per step and
-        feeding back in.
-        """
-
-        # Fresh state
-        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
-
-        # Seed random character to start (as one-hot)
-        seedvec = charset.randomonehot()
-
-        # Get generated sequence
-        idxs, end_state = self.gen_char_probs(numchars - 1, seedvec, start_state, temperature)
-
-        # Choose characters according to probabilities
-        if use_max:
-            chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
-        else:
-            chars = [ charset.charatidx(np.random.choice(charset.vocab_size, p=i)) for i in idxs ]
 
         # Now construct string
         return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
@@ -206,7 +187,7 @@ class ModelParams:
         pass
     def gen_chars(self, *args, **kwargs):
         pass
-    def gen_char_probs(self, *args, **kwargs):
+    def gen_chars_temp(self, *args, **kwargs):
         pass
     def gen_chars_max(self, *args, **kwargs):
         pass
