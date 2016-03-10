@@ -1045,7 +1045,8 @@ class ModelState:
         datafilename = dataset.savetofile(dirname)
 
         # Now we can initialize the state
-        modelstate = cls(charset, dirname, modeltype, srcinfo=(basename + "-state"), 
+        modelname = "{0:s}-{1:d}x{2:d}-state".format(modeltype, hyperparams.layers, hyperparams.state_size)
+        modelstate = cls(charset, dirname, modeltype, srcinfo=modelname, 
             datafile=datafilename, data=dataset)
 
         # And build the model, with optional checkpoint
