@@ -48,8 +48,7 @@ class ModelParams():
             errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
 
         # Return total loss divided by number of characters in sample
-        # (w/extra term to avoid div by 0)
-        return np.sum(errors).item() / float(X.shape[0] * X.shape[1] + 1e-8)
+        return np.sum(errors).item() / float(X.size / X.shape[-1])
 
     def train(self, dataset, batchsize=0, num_examples=1000, callback_every=1000, callback=None, init_state=None):
         """Train model on given dataset for num_examples, with optional 
@@ -309,6 +308,16 @@ class GRUResize(ModelParams):
         def forward_step(x_t, s_t):
             """Input vector/matrix x(t) and state matrix s(t)."""
 
+            # Gradient clipping
+            E_c = theano.gradient.grad_clip(E, -2.0, 2.0)
+            F_c = theano.gradient.grad_clip(F, -2.0, 2.0)
+            U_c = theano.gradient.grad_clip(U, -2.0, 2.0)
+            W_c = theano.gradient.grad_clip(W, -2.0, 2.0)
+            V_c = theano.gradient.grad_clip(V, -2.0, 2.0)
+            a_c = theano.gradient.grad_clip(a, -2.0, 2.0)
+            b_c = theano.gradient.grad_clip(b, -2.0, 2.0)
+            c_c = theano.gradient.grad_clip(c, -2.0, 2.0)
+
             # Initialize state to return
             s_next = T.zeros_like(s_t)
 
@@ -316,11 +325,11 @@ class GRUResize(ModelParams):
             # Get previous state for this layer
             s_prev = s_t[0]
             # Update gate
-            z = T.nnet.hard_sigmoid(T.dot(x_t, E[0]) + T.dot(s_prev, F[0]) + a[0])
+            z = T.nnet.hard_sigmoid(T.dot(x_t, E_c[0]) + T.dot(s_prev, F_c[0]) + a_c[0])
             # Reset gate
-            r = T.nnet.hard_sigmoid(T.dot(x_t, E[1]) + T.dot(s_prev, F[1]) + a[1])
+            r = T.nnet.hard_sigmoid(T.dot(x_t, E_c[1]) + T.dot(s_prev, F_c[1]) + a_c[1])
             # Candidate state
-            h = T.tanh(T.dot(x_t, E[2]) + T.dot(r * s_prev, F[2]) + a[2])
+            h = T.tanh(T.dot(x_t, E_c[2]) + T.dot(r * s_prev, F_c[2]) + a_c[2])
             # New state
             s_new = (T.ones_like(z) - z) * h + z * s_prev
             s_next = T.set_subtensor(s_next[0], s_new)
@@ -334,11 +343,11 @@ class GRUResize(ModelParams):
                 # Get previous state for this layer
                 s_prev = s_t[layer]
                 # Update gate
-                z = T.nnet.hard_sigmoid(T.dot(inout, U[L]) + T.dot(s_prev, W[L]) + b[L])
+                z = T.nnet.hard_sigmoid(T.dot(inout, U_c[L]) + T.dot(s_prev, W_c[L]) + b_c[L])
                 # Reset gate
-                r = T.nnet.hard_sigmoid(T.dot(inout, U[L+1]) + T.dot(s_prev, W[L+1]) + b[L+1])
+                r = T.nnet.hard_sigmoid(T.dot(inout, U_c[L+1]) + T.dot(s_prev, W_c[L+1]) + b_c[L+1])
                 # Candidate state
-                h = T.tanh(T.dot(inout, U[L+2]) + T.dot(r * s_prev, W[L+2]) + b[L+2])
+                h = T.tanh(T.dot(inout, U_c[L+2]) + T.dot(r * s_prev, W_c[L+2]) + b_c[L+2])
                 # New state
                 s_new = (T.ones_like(z) - z) * h + z * s_prev
                 s_next = T.set_subtensor(s_next[layer], s_new)
@@ -346,7 +355,7 @@ class GRUResize(ModelParams):
                 inout = s_new
 
             # Final output
-            o_t = T.nnet.softmax(T.dot(inout, V) + c)
+            o_t = T.nnet.softmax(T.dot(inout, V_c) + c_c)
             return o_t, s_next
 
 
@@ -1325,17 +1334,15 @@ class ModelState:
 
             # Calc loss
             stderr.write("--------\n\nCalculating loss...\n")
+            stderr.flush()
 
             # Get wraparound slices of dataset, since calc_loss doesn't update pos
-            idxs = range(self.model.pos, self.model.pos + valid_len)
+            idxs = range(self.model.pos, self.model.pos + valid_for)
             x_slice = self.data.x_onehots.take(idxs, axis=0, mode='wrap')
             y_slice = self.data.y_onehots.take(idxs, axis=0, mode='wrap')
 
-            # Only pass slice of state if batched
-            if batchsize > 0:
-                loss = self.model.calc_loss(x_slice, y_slice, train_state[:,0,:])
-            else:
-                loss = self.model.calc_loss(x_slice, y_slice, train_state)
+            # Calculate loss with blank state
+            loss = self.model.calc_loss(x_slice, y_slice)
 
             stderr.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
 
