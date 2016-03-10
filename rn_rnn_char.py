@@ -979,7 +979,7 @@ class ModelState:
         time2 = time.time()
         timetaken = time2 - time1
 
-        stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_len))
+        stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, datalen))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
 
 
