@@ -6,7 +6,7 @@ import numpy as np
 import theano
 import theano.tensor as T
 
-theano.config.exception_verbosity='high'
+#theano.config.exception_verbosity='high'
 
 
 class HyperParams:
@@ -49,8 +49,9 @@ class ModelParams():
 
         return np.sum(errors).item() / float(X.size / X.shape[-1])
 
-    def train(self, inputs, outputs, num_examples=0, callback_every=1000, callback=None, init_state=None):
-        """Train model on given inputs/outputs for num_examples.
+    def train(self, dataset, batchsize=0, num_examples=1000, callback_every=1000, callback=None, init_state=None):
+        """Train model on given dataset for num_examples, with optional 
+        batch size.
 
         Optional callback function called after callback_every, with 
         model and current state as arguments.
@@ -60,18 +61,26 @@ class ModelParams():
 
         If num_examples is 0, will train for full epoch.
         """
-        input_len = inputs.shape[0]
+        input_len = dataset.batchepoch(batchsize) if batchsize > 0 else dataset.dataset_len
         train_len = num_examples if num_examples else input_len
 
         # Start with fresh state if none provided
-        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
+        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
+
+        # Debug
+        # print("Training with batchsize {0:d}, state shape {1}".format(batchsize, repr(step_state.shape)))
 
         # Use explicit indexing instead of fancy slicing so we can 
         # keep track, both for model status and checkpoint purposes
         for train_pos in range(train_len):
             # Learning step
-            step_state = self.train_step(inputs[self.pos], outputs[self.pos], 
-                step_state, self.hyper.learnrate, self.hyper.decay)
+            if batchsize > 0:
+                xbatch, ybatch = dataset.batch(self.pos, batchsize)
+                step_state = self.train_step_bat(xbatch, ybatch, step_state, 
+                    self.hyper.learnrate, self.hyper.decay)
+            else:
+                step_state = self.train_step(dataset.x_onehots[self.pos], dataset.y_onehots[self.pos], 
+                    step_state, self.hyper.learnrate, self.hyper.decay)
 
             # Advance position and overflow
             self.pos += 1
@@ -81,59 +90,81 @@ class ModelParams():
 
             # Optional callback
             if callback and callback_every and (train_pos + 1) % callback_every == 0:
-                callback(self, step_state)
+                # Make sure to only pass a slice of state if batched
+                if batchsize > 0:
+                    callback(self, step_state[:,0,:])
+                else:
+                    callback(self, step_state)
 
         # Return final state
         return step_state
 
-    def traintime(self, inputvec, outputvec, init_state=None):
+    def traintime(self, inputmat, outputmat, init_state=None):
         """Prints time for single training step.
-        Input should be single-dim vector.
+        Input must be matrix of one-hot vectors.
         """
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
         # Time training step
         time1 = time.time()
-        self.train_step(inputvec, outputvec, start_state, self.hyper.learnrate, self.hyper.decay)
+        self.train_step(inputmat, outputmat, start_state, self.hyper.learnrate, self.hyper.decay)
         time2 = time.time()
 
         stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputvec), (time2 - time1) * 1000.0))
+            len(inputmat), (time2 - time1) * 1000.0))
 
         # Time loss calc
         time1 = time.time()
-        self.err(inputvec, outputvec, start_state)
+        self.err(inputmat, outputmat, start_state)
         time2 = time.time()
 
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputvec), (time2 - time1) * 1000.0))
+            len(inputmat), (time2 - time1) * 1000.0))
 
+    def batchtime(self, intensor, outtensor, init_state=None):
+        """Prints time for batch training step (default size 16).
+        Input must be 3D tensor of matrices of one-hot vectors.
+        """
+        # Fresh state
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(intensor.shape[1])
+
+        # Time training step
+        time1 = time.time()
+        self.train_step_bat(intensor, outtensor, start_state, self.hyper.learnrate, self.hyper.decay)
+        time2 = time.time()
+
+        stdout.write(
+            "Time for SGD/RMS learning batch of {0:d} sequences, {1:d} chars each: {2:.4f} ms\n".format(
+            intensor.shape[1], intensor.shape[0], (time2 - time1) * 1000.0))
+
+        # Time loss calc
+        # NOTE: uses only matrix from first part of batch (batched error not yet implemented)
+        time1 = time.time()
+        self.err(intensor[:,0,:], outtensor[:,0,:], start_state[:,0,:])
+        time2 = time.time()
+
+        stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
+            intensor.shape[0], (time2 - time1) * 1000.0))
+
+    # Older version, now redundant
     def genchars(self, charset, numchars, init_state=None):
         """Generate string of characters from current model parameters."""
 
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
-        # Seed random character to start
-        seedch = charset.randomidx()
-
-        # Convert to one-hot vector
-        # TODO: move to charset
-        charvec = np.zeros(charset.vocab_size)
-        charvec[seedch] = 1.0
-
-        seedvec = charvec.astype(theano.config.floatX)
+        # Seed random character to start (as one-hot)
+        seedvec = charset.randomonehot()
 
         # Get generated sequence
-        # TODO: have charset able to process arrays
-        # TODO: add in multinomial/choice option instead of just argmax
         idxs, end_state = self.gen_chars(numchars, seedvec, start_state)
         chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
-        # Now construct string
-        return charset.charatidx(seedch) + "".join(chars), end_state
 
-    def gencharprobs(self, charset, numchars, init_state=None, use_max=False):
+        # Now construct string
+        return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
+
+    def genchar_probs(self, charset, numchars, init_state=None, use_max=False):
         """Generate string of characters from current model parameters.
         Uses probabilities of entire sequence, instead of picking char per step.
         """
@@ -141,45 +172,43 @@ class ModelParams():
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
-        # Seed random character to start
-        seedch = charset.randomidx()
-
-        # Convert to one-hot vector
-        # TODO: move to charset
-        charvec = np.zeros(charset.vocab_size)
-        charvec[seedch] = 1.0
-
-        seedvec = charvec.astype(theano.config.floatX)
+        # Seed random character to start (as one-hot)
+        seedvec = charset.randomonehot()
 
         # Get generated sequence
-        # TODO: have charset able to process arrays
-        # TODO: add in multinomial/choice option instead of just argmax
-        idxs, end_state = self.gen_char_probs(numchars, seedvec, start_state)
+        idxs, end_state = self.gen_char_probs(numchars - 1, seedvec, start_state)
+
+        # Choose characters according to probabilities
         if use_max:
             chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
         else:
             chars = [ charset.charatidx(np.random.choice(charset.vocab_size, p=i)) for i in idxs ]
+
         # Now construct string
-        return charset.charatidx(seedch) + "".join(chars), end_state
+        return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
 
     # TODO: Non-Theano step function
     # TODO: Non-Theano char generator
 
+    # Python model-dependent functions
     def freshstate(self):
         pass
 
+    # Theano-generated model-dependent functions
     def train_step(self, *args, **kwargs):
         pass
-
+    def train_step_bat(self, *args, **kwargs):
+        pass
+    def errs(self, *args, **kwargs):
+        pass
     def err(self, *args, **kwargs):
         pass
-
     def grad(self, *args, **kwargs):
         pass
-
     def gen_chars(self, *args, **kwargs):
         pass
-
+    def gen_char_probs(self, *args, **kwargs):
+        pass
     def predict_prob(self, *args, **kwargs):
         pass
 
@@ -268,7 +297,6 @@ class GRUResize(ModelParams):
 
         # Local bindings for convenience
         E, F, U, W, V, a, b, c = self.E, self.F, self.U, self.W, self.V, self.a, self.b, self.c
-        #xI = T.eye(vocab_size, vocab_size)
 
         # Forward propagation
         def forward_step(x_t, s_t):
@@ -276,13 +304,6 @@ class GRUResize(ModelParams):
 
             # Initialize state to return
             s_next = T.zeros_like(s_t)
-
-            # Not taking shortcut anymore
-            # Assumes x_t is already one-hot vector
-
-            # OLD, IGNORE            
-            # Create one-hot vector from x_t using row of xI
-            # inout = xI[x_t,:]
 
             # Vocab-to-state GRU layer
             # Get previous state for this layer
@@ -318,7 +339,7 @@ class GRUResize(ModelParams):
                 inout = s_new
 
             # Final output
-            o_t = T.dot(inout, V) + c
+            o_t = T.nnet.softmax(T.dot(inout, V) + c)
             return o_t, s_next
 
 
@@ -329,14 +350,14 @@ class GRUResize(ModelParams):
         y = T.matrix('y')
         s_in = T.matrix('s_in')
 
-        def single_train_step(x_in, s_in):
-            o_p, s_out = forward_step(x_in, s_in)
+        def single_step(x_v, s_m):
+            o_p, s_p = forward_step(x_v, s_m)
             # Theano's softmax returns matrix, and we just want the one entry
-            return T.nnet.softmax(o_p)[0], s_out
+            return o_p[-1], s_p
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], _ = theano.scan(
-            single_train_step, 
+            single_step, 
             sequences=x, 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in)])
@@ -401,20 +422,19 @@ class GRUResize(ModelParams):
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
 
-        def batch_train_step(x_in, s_in):
-            o_p, s_out = forward_step(x_in, s_in)
-            # We want the whole matrix from softmax for batches
-            return T.nnet.softmax(o_p), s_out
-
+        # We can use the whole matrix from softmax for batches
         [o_bat, s_seq_bat], _ = theano.scan(
-            batch_train_step, 
+            forward_step, 
             sequences=x_bat, 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
         s_out_bat = s_seq_bat[-1]
 
         # Costs
-        # Should regularize at some point
+        # We have to reshape the outputs, since Theano's categorical cross-entropy
+        # function will only work with matrices or vectors, not tensor3s.
+        # Thus we flatten along the sequence/batch axes, leaving the prediction
+        # vectors as-is, and this seems to be enough for Theano's deep magic to work.
         o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
         y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
         cost_bat = T.sum(T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat))
@@ -480,18 +500,26 @@ class GRUResize(ModelParams):
         k = T.iscalar('k')
 
         rng = T.shared_randomstreams.RandomStreams(seed=int(
-            self.V.get_value()[0,0] +
-            self.U.get_value()[0,0,0] + 
-            self.W.get_value()[0,0,0])) 
+            np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
+            * np.sum(self.c.get_value()) * 100000.0) % 4294967295)
 
+        '''
+        # For debug
+        o_p1, s_p1 = forward_step(x_in, s_in)
+        self._single_step = theano.function(
+            inputs=[x_in, s_in], 
+            outputs=[o_p1, s_p1],
+            name='_single_step')
+
+        '''
         # Generate output sequence based on input single onehot and state (new version)
-        # Chooses output chars (onehots) at each step by choice from last step's probabilities
+        # Returns probability matrix of sequence
         def generate_step(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t1, dtype=theano.config.floatX)
+            o_rand = rng.multinomial(n=1, pvals=o_t1[-1], dtype=theano.config.floatX)
             #o_rand = rng.choice(a=vocab_size, p=o_t1)
 
             return o_rand, s_t1
@@ -507,34 +535,27 @@ class GRUResize(ModelParams):
         s_ch = s_chs[-1]
         self.gen_chars = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_chars', updates=genupdate)
 
-        # Sequence generation alternative
-        # Returns probability matrix of sequence
-        # No character selected at each step - probabilities fed back in
-        [o_chs, s_chs], genupdate = theano.scan(
-            fn=forward_step,
+        # As above, but no character selected at each step - probabilities fed back in
+        [o_chps, s_chps], _ = theano.scan(
+            fn=single_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
             n_steps=k)
-        s_ch = s_chs[-1]
-        self.gen_char_probs = theano.function([k, x_in, s_in], [o_chs, s_ch], name='gen_char_probs')
+        s_chp = s_chps[-1]
+        self.gen_char_probs = theano.function([k, x_in, s_in], [o_chps, s_chp], name='gen_char_probs')
 
-        # Predicted next char probability (old version, reqires sequence input)
-        self.predict_prob = theano.function([x, s_in], [o, s_out])
+        # Sequence generation alternative
+        # Predicted next char probability 
+        # (reqires recursive input to generate sequence)
+        o_next = o[-1]
+        self.predict_prob = theano.function([x, s_in], [o_next, s_out])
 
         ### Whew, I think we're done! ###
 
     @classmethod
-    def loadfromfile(cls, infile, transpose=False):
+    def loadfromfile(cls, infile):
         with np.load(infile) as f:
             # Load matrices
             p, E, F, U, W, V, a, b, c = f['p'], f['E'], f['F'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
-
-            # Transpose if requested (to load older models)
-            if transpose:
-                E = E.transpose(0, 2, 1)
-                F = F.transpose(0, 2, 1)
-                U = U.transpose(0, 2, 1)
-                W = W.transpose(0, 2, 1)
-                V = V.transpose(1, 0)
 
             # Extract hyperparams and position
             params = pickle.loads(p.tobytes())
@@ -634,6 +655,12 @@ class CharSet:
             char = random.randrange(self.vocab_size)
 
         return char
+
+    def randomonehot(self, allow_newline=False):
+        '''Returns one-hot vector of random character index.'''
+        vec = np.zeros(self.vocab_size, dtype=theano.config.floatX)
+        vec[self.randomidx()] = 1.0
+        return vec
         
 class DataSet:
     """Preprocessed dataset, split into sequences and stored as arrays of character indexes."""
@@ -787,6 +814,35 @@ class DataSet:
             return filename
         finally:
             f.close()
+
+    def batchepoch(self, batchsize=16):
+        """Gets epoch size for given batchsize."""
+
+        # If there's some extra after, we want to extend the batch epoch
+        # by 1, so rollover will catch the whole dataset (plus a small 
+        # bit of wraparound (easier than padding))
+        spacing = self.data_len // batchsize
+        offset = 1 if self.data_len % spacing > 0 else 0
+        return spacing + offset
+
+
+    def batch(self, pos, batchsize=16):
+        """Gets batch of data starting at pos, and evenly spaced along the first
+        axis of each onehot array.
+        Returns 3-dim ndarrays from x_onehots and y_onehots.
+        """
+        
+        # Find batch spacing and derive indices
+        indices = (np.arange(batchsize) * self.batchepoch(batchsize)) + pos
+
+        # Get slices and rearrange
+        # Have to transpose so that 2nd/3rd dimensions are matrices corresponding
+        # to batchsize rows and onehot columns, and the 1st dim (slice indicies) are
+        # the sequences the batch training function will take
+        xbatch = self.x_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
+        ybatch = self.y_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
+
+        return xbatch, ybatch
 
 
 class Checkpoint:
@@ -1083,7 +1139,7 @@ class ModelState:
         else:
             return False
 
-    def loadmodel(self, filename=None, transpose=False):
+    def loadmodel(self, filename=None):
         """Attempts to load model parameters first from given file, 
         then from current model file, then from current checkpoint (or file).
         """
@@ -1109,14 +1165,14 @@ class ModelState:
 
         # Load model now that filename is established
         useclass = self.modeltypes[self.modeltype]
-        self.model = useclass.loadfromfile(openfile, transpose=transpose)
+        self.model = useclass.loadfromfile(openfile)
         if self.model:
             self.modelfile = openfile
             return True
         else:
             return False
 
-    def restore(self, checkpoint=None, transpose=False):
+    def restore(self, checkpoint=None):
         """Restores dataset and model params from specified checkpoint.
         Defaults to stored checkpoint if none provided.
         """
@@ -1144,7 +1200,7 @@ class ModelState:
         # Load data and model, return True only if both work
         # Passing checkpoint's data/model filenames, overriding 
         # those already stored in model state
-        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile, transpose=transpose):
+        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile):
             return True
         else:
             return False
@@ -1212,7 +1268,7 @@ class ModelState:
             # Take checkpoint
             self.newcheckpoint(loss, savedir=checkpointdir)
 
-    def trainmodel(self, num_rounds=1, train_len=0, valid_len=0, print_every=1000):
+    def trainmodel(self, num_rounds=1, batchsize=0, train_len=0, valid_len=0, print_every=1000):
         """Train loaded model for num_rounds of train_len, printing
         progress every print_every examples, calculating loss using 
         valid_len examples, and creating a checkpoint after each round.
@@ -1232,21 +1288,26 @@ class ModelState:
         # Progress callback
         progress = printprogress(self.chars)
 
-        train_for = train_len if train_len else len(self.data.x_array)
-        valid_for = valid_len if valid_len else len(self.data.x_array)
+        # Get max length
+        datalen = self.data.batchepoch(batchsize) if batchsize > 0 else self.data.data_len
+        train_for = train_len if train_len else datalen
+        valid_for = valid_len if valid_len else datalen
 
         # Start with a blank state
-        train_state = self.model.freshstate()
+        train_state = self.model.freshstate(batchsize)
 
         # First sample
-        progress(self.model, train_state)
+        if batchsize > 0:
+            progress(self.model, train_state[:,0,:])
+        else:
+            progress(self.model, train_state)
 
         # Train for num_rounds
         for roundnum in range(num_rounds):
             # Train...
             train_state = self.model.train(
-                self.data.x_onehots, 
-                self.data.y_onehots,
+                self.data,
+                batchsize=batchsize,
                 num_examples=train_for,
                 callback=progress,
                 callback_every=print_every,
@@ -1260,7 +1321,11 @@ class ModelState:
             x_slice = self.data.x_onehots.take(idxs, axis=0, mode='wrap')
             y_slice = self.data.y_onehots.take(idxs, axis=0, mode='wrap')
 
-            loss = self.model.calc_loss(x_slice, y_slice, train_state)
+            # Only pass slice of state if batched
+            if batchsize > 0:
+                loss = self.model.calc_loss(x_slice, y_slice, train_state[:,0,:])
+            else:
+                loss = self.model.calc_loss(x_slice, y_slice, train_state)
 
             stderr.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
 
