@@ -202,28 +202,38 @@ class GRUEncode(ModelParams):
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
 
-        def batch_step(x_t, s_t):
+        def batch_step(x_t, y_t, s_t):
             o_t1, s_t = forward_step(x_t, s_t)
             # We can use the whole matrix from softmax for batches
             o_t2 = T.nnet.softmax(o_t1)
-            return o_t2, s_t
+            # Get cross-entropy loss of batch step
+            e_t = T.sum(T.nnet.categorical_crossentropy(o_t2, y_t))
+            return e_t, s_t
 
-        [o_bat, s_seq_bat], _ = th.scan(
+        [err_bat, s_seq_bat], _ = th.scan(
             batch_step, 
-            sequences=x_bat, 
+            sequences=[x_bat, y_bat], 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
         s_out_bat = s_seq_bat[-1]
 
         # Costs
+
+        # OLD VERSION
         # We have to reshape the outputs, since Theano's categorical cross-entropy
         # function will only work with matrices or vectors, not tensor3s.
         # Thus we flatten along the sequence/batch axes, leaving the prediction
         # vectors as-is, and this seems to be enough for Theano's deep magic to work.
-        o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
-        y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
-        o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
-        cost_bat = T.sum(o_errs_bat)
+        #o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
+        #y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
+        #o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
+        #cost_bat = T.sum(o_errs_bat)
+
+        # NEW VERSION
+        # Since Theano's categorical cross-entropy function only works on matrices,
+        # the cross-entropy loss has been moved inside the scan, so we can keep the
+        # sequencing intact. (Seems to be a bit faster, maybe?)
+        cost_bat = T.sum(err_bat)
 
         # Gradients
         dE_bat = T.grad(cost_bat, E)
@@ -269,7 +279,7 @@ class GRUEncode(ModelParams):
 
         # Error/cost calculations
         self.errs = th.function([x, y, s_in], [o_errs, s_out])
-        self.errs_bat = th.function([x_bat, y_bat, s_in_bat], [o_errs_bat, s_out_bat])
+        #self.errs_bat = th.function([x_bat, y_bat, s_in_bat], [o_errs_bat, s_out_bat])
         self.err = th.function([x, y, s_in], [cost, s_out])
         self.err_bat = th.function([x_bat, y_bat, s_in_bat], [cost_bat, s_out_bat])
 
