@@ -246,7 +246,8 @@ class GRUResize(ModelParams):
         # vectors as-is, and this seems to be enough for Theano's deep magic to work.
         o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
         y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
-        cost_bat = T.sum(T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat))
+        o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
+        cost_bat = T.sum(o_errs_bat)
 
         # Gradients
         dE_bat = T.grad(cost_bat, E)
@@ -294,11 +295,13 @@ class GRUResize(ModelParams):
 
         ### ERROR CHECKING ###
 
-        # Error
+        # Error/cost calculations
         self.errs = th.function([x, y, s_in], [o_errs, s_out])
+        self.errs_bat = th.function([x_bat, y_bat, s_in_bat], [o_errs_bat, s_out_bat])
         self.err = th.function([x, y, s_in], [cost, s_out])
+        self.err_bat = th.function([x_bat, y_bat, s_in_bat], [cost_bat, s_out_bat])
 
-        # Gradients
+        # Gradient calculations
         # We'll use this at some point for gradient checking
         self.grad = th.function([x, y, s_in], [dE, dF, dU, dW, dV, da, db, dc])
 
