@@ -399,7 +399,6 @@ class GRUEncode(ModelParams):
             if isinstance(outfile, str):
                 stderr.write("Saved model parameters to {0}\n".format(outfile))
 
-    # TODO: scale state by batch size
     def freshstate(self, batchsize=0):
         if batchsize > 0:
             return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
