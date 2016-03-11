@@ -122,7 +122,7 @@ class GRUEncode(ModelParams):
                 inout = s_new
 
             # Final output
-            o_t = T.nnet.softmax(T.dot(inout, V_c) + c_c)
+            o_t = T.dot(inout, V_c) + c_c
             return o_t, s_next
 
 
@@ -133,10 +133,11 @@ class GRUEncode(ModelParams):
         y = T.matrix('y')
         s_in = T.matrix('s_in')
 
-        def single_step(x_v, s_m):
-            o_p, s_p = forward_step(x_v, s_m)
+        def single_step(x_t, s_t):
+            o_t1, s_t = forward_step(x_t, s_t)
             # Theano's softmax returns matrix, and we just want the one entry
-            return o_p[-1], s_p
+            o_t2 = T.nnet.softmax(o_t1)[-1]
+            return o_t2, s_t
 
         # Now get Theano to do the heavy lifting
         [o, s_seq], _ = th.scan(
@@ -201,9 +202,14 @@ class GRUEncode(ModelParams):
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
 
-        # We can use the whole matrix from softmax for batches
+        def batch_step(x_t, s_t):
+            o_t1, s_t = forward_step(x_t, s_t)
+            # We can use the whole matrix from softmax for batches
+            o_t2 = T.nnet.softmax(o_t1)
+            return o_t2, s_t
+
         [o_bat, s_seq_bat], _ = th.scan(
-            forward_step, 
+            batch_step, 
             sequences=x_bat, 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
@@ -288,67 +294,49 @@ class GRUEncode(ModelParams):
             name='_single_step')
 
         '''
-        # Generate output sequence based on input single onehot and given state
-        # Chooses output char by multinomial, and feeds back in for next step
+        # Generate output sequence based on input single onehot and given state.
+        # Chooses output char by multinomial, and feeds back in for next step.
+        # Scaled by temperature parameter before softmax (temperature 1.0 leaves
+        # softmax output unchanged).
         # Returns matrix of one-hot vectors
-        def generate_step(x_t, s_t):
+        def generate_step(x_t, s_t, temp):
             # Do next step
-            o_t1, s_t1 = forward_step(x_t, s_t)
+            o_t1, s_t = forward_step(x_t, s_t)
+
+            # Get softmax
+            o_t2 = T.nnet.softmax(o_t1 / temp)[-1]
 
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t1[-1], dtype=th.config.floatX)
+            o_rand = rng.multinomial(n=1, pvals=o_t2, dtype=th.config.floatX)
 
-            return o_rand, s_t1
+            return o_rand, s_t
 
         [o_chs, s_chs], genupdate = th.scan(
             fn=generate_step,
             outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            non_sequences=temperature,
             n_steps=k)
         s_ch = s_chs[-1]
 
         self.gen_chars = th.function(
-            inputs=[k, x_in, s_in], 
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.1)], 
             outputs=[o_chs, s_ch], 
             name='gen_chars', 
             updates=genupdate)
-
-        # As above, but step output scaled by temperature
-        def generate_step_temp(x_t, s_t, temp):
-            # Do next step
-            o_t1, s_t1 = forward_step(x_t, s_t)
-
-            # Scale by temperature
-            o_t2 = T.exp(o_t1[-1] / temp)
-            o_ts = o_t2 / T.sum(o_t2)
-
-            # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_ts, dtype=th.config.floatX)
-
-            return o_rand, s_t1
-
-        [o_chps, s_chps], genupdatetmp = th.scan(
-            fn=generate_step_temp,
-            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
-            non_sequences=temperature,
-            n_steps=k)
-        s_chp = s_chps[-1]
-
-        self.gen_chars_temp = th.function(
-            inputs=[k, x_in, s_in, th.Param(temperature, default=0.05)], 
-            outputs=[o_chps, s_chp], 
-            name='gen_chars_temp',
-            updates=genupdatetmp)
 
         # Chooses output char by argmax, and feeds back in
         def generate_step_max(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
+            # Get softmax
+            o_t2 = T.nnet.softmax(o_t1)[-1]
+
             # Now find selected index
-            o_idx = T.argmax(o_t1[-1])
+            o_idx = T.argmax(o_t2)
 
             # Create one-hot
-            o_ret = T.zeros_like(o_t1[-1])
+            o_ret = T.zeros_like(o_t2)
             o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
 
             return o_ret, s_t1

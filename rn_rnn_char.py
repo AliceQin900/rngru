@@ -68,24 +68,25 @@ class CharSet:
         else:
             return self.unknown_char
 
+    def onehot(self, idx):
+        '''Returns character at idx encoded as one-hot vector.'''
+        vec = np.zeros(self.vocab_size, dtype=th.config.floatX)
+        vec[idx] = 1.0
+        return vec
+
     def randomidx(self, allow_newline=False):
         '''Returns random character, excluding unknown_char.'''
-        forbidden = [self.unknown_idx]
+        forbidden = {self.unknown_idx}
         if not allow_newline:
-            forbidden.append(self.idxofchar('\n'))
+            forbidden.add(self.idxofchar('\n'))
 
         # Make sure we don't return an unknown char
-        char = self.unknown_idx
-        while char in forbidden:
-            char = random.randrange(self.vocab_size)
+        idx = self.unknown_idx
+        while idx in forbidden:
+            idx = random.randrange(self.vocab_size)
 
-        return char
+        return idx
 
-    def randomonehot(self, allow_newline=False):
-        '''Returns one-hot vector of random character index.'''
-        vec = np.zeros(self.vocab_size, dtype=th.config.floatX)
-        vec[self.randomidx()] = 1.0
-        return vec
         
 class DataSet:
     """Preprocessed dataset, split into sequences and stored as arrays of character indexes."""
@@ -794,7 +795,7 @@ def printprogress(charset):
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
         print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
-        genstr, _ = model.genchars(charset, 100, init_state=init_state)
+        genstr, _ = model.genchars(charset, 100, init_state=init_state, temperature=0.5)
         #genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
     return retfunc
