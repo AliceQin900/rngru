@@ -31,12 +31,28 @@ class CharSet:
 
     unknown_char='�'    # Standard Python replacement char for invalid Unicode values
 
-    def __init__(self, chars, srcinfo=None):
+    @classmethod
+    def _linefinder(cls, datastr):
+        '''Iterator over datastr, finding characters that start lines.'''
+        start = 0
+        maxidx = len(datastr) - 1
+        while True:
+            start = datastr.find('\n', start)
+            if start == -1:
+                return
+            elif start < maxidx and datastr[start+1] not in '\n\r�':
+                yield datastr[start+1]
+            start += 1
+
+    def __init__(self, datastr, srcinfo=None):
         '''Creates a new CharSet object from a given sequence.
-        Parameter chars should be a list, tuple, or set of characters.
+        Parameter datastr should be a string or list of chars.
         Parameter srcinfo is optional, to identify charset used for processing.
         '''
         self.srcinfo = srcinfo
+
+        # Find set of chars in supplied sequence
+        chars = set(datastr)
 
         # Create temp list (mutable), starting with unknown
         # (We want unknown to be index 0 in case it shows up by accident later in arrays)
@@ -53,6 +69,11 @@ class CharSet:
         self.vocab_size = len(self._char_to_idx)
 
         stderr.write("Initialized character set, size: {0:d}\n".format(self.vocab_size))
+
+    def findlinestarts(self, datastr):
+        '''Finds characters that begin a line and stores as list.'''
+        linestartchars = set(self._linefinder(datastr))
+        self.linestarts = [self.idxofchar(ch) for ch in linestartchars]
 
     def idxofchar(self, char):
         '''Returns index of char, or index of unknown replacement if index out of range.'''
@@ -86,6 +107,10 @@ class CharSet:
             idx = random.randrange(self.vocab_size)
 
         return idx
+
+    def semirandomidx(self):
+        '''Returns random character from line-start list.'''
+        return self.linestarts[random.randrange(len(self.linestarts))]
 
         
 class DataSet:
