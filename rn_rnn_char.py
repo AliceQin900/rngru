@@ -24,7 +24,7 @@ class HyperParams:
         self.decay = decay
 
 
-# TODO: change to let CharSet get chars from string, with frequencies and line beginnings
+# TODO (maybe): change to let CharSet get frequencies from strings
 # TODO: save/load charset in its own file
 class CharSet:
     """Character set with bidirectional mappings."""
@@ -72,8 +72,17 @@ class CharSet:
 
     def findlinestarts(self, datastr):
         '''Finds characters that begin a line and stores as list.'''
-        linestartchars = set(self._linefinder(datastr))
-        self.linestarts = [self.idxofchar(ch) for ch in linestartchars]
+        # linestartchars = set(self._linefinder(datastr))
+
+        # Keep order of found chars
+        foundchars = set()
+        self._line_start_chars = []
+        self._line_start_idxs = []
+        for ch in self._linefinder(datastr):
+            if ch not in foundchars:
+                foundchars.add(ch)
+                self._line_start_chars.append(ch)
+                self._line_start_idxs.append(self.idxofchar(ch))
 
     def idxofchar(self, char):
         '''Returns index of char, or index of unknown replacement if index out of range.'''
@@ -110,7 +119,7 @@ class CharSet:
 
     def semirandomidx(self):
         '''Returns random character from line-start list.'''
-        return self.linestarts[random.randrange(len(self.linestarts))]
+        return self._line_start_idxs[random.randrange(len(self._line_start_idxs))]
 
         
 class DataSet:
@@ -162,46 +171,6 @@ class DataSet:
 
         # Create one-hot encodings
         self.build_onehots()
-
-    def build_onehots(self, vocab_size=None):
-        """Build one-hot encodings of each sequence."""
-
-        # If we're passed a charset size, great - if not, fall back to inferring vocab size
-        if vocab_size:
-            self.charsize = vocab_size
-            vocab = vocab_size
-        else:
-            try:
-                vocab = self.charsize
-            except AttributeError as e:
-                stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
-                vocab = np.amax(self.y_array) + 1
-                self.charsize = vocab
-                stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
-
-        stderr.write("Constructing one-hot vector data...")
-        stderr.flush()
-
-        try:
-            datalen = self.data_len
-        except AttributeError:
-            datalen = len(self.x_array)
-            self.data_len = datalen
-
-        time1 = time.time()
-
-        # numpy fancy indexing is fun!
-        x_onehots = np.eye(vocab, dtype=th.config.floatX)[self.x_array]
-        y_onehots = np.eye(vocab, dtype=th.config.floatX)[self.y_array]
-
-        # These can be large, so we don't necessarily want them on the GPU
-        # Thus they're not Theano shared vars
-        self.x_onehots = x_onehots #.astype(th.config.floatX)
-        self.y_onehots = y_onehots #.astype(th.config.floatX)
-
-        time2 = time.time()
-
-        stderr.write("done! Took {0:.4f} ms.\n".format((time2 - time1) * 1000.0))
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -266,6 +235,46 @@ class DataSet:
         finally:
             f.close()
 
+    def build_onehots(self, vocab_size=None):
+        """Build one-hot encodings of each sequence."""
+
+        # If we're passed a charset size, great - if not, fall back to inferring vocab size
+        if vocab_size:
+            self.charsize = vocab_size
+            vocab = vocab_size
+        else:
+            try:
+                vocab = self.charsize
+            except AttributeError as e:
+                stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
+                vocab = np.amax(self.y_array) + 1
+                self.charsize = vocab
+                stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
+
+        stderr.write("Constructing one-hot vector data...")
+        stderr.flush()
+
+        try:
+            datalen = self.data_len
+        except AttributeError:
+            datalen = len(self.x_array)
+            self.data_len = datalen
+
+        time1 = time.time()
+
+        # numpy fancy indexing is fun!
+        x_onehots = np.eye(vocab, dtype=th.config.floatX)[self.x_array]
+        y_onehots = np.eye(vocab, dtype=th.config.floatX)[self.y_array]
+
+        # These can be large, so we don't necessarily want them on the GPU
+        # Thus they're not Theano shared vars
+        self.x_onehots = x_onehots #.astype(th.config.floatX)
+        self.y_onehots = y_onehots #.astype(th.config.floatX)
+
+        time2 = time.time()
+
+        stderr.write("done! Took {0:.4f} ms.\n".format((time2 - time1) * 1000.0))
+
     def batchepoch(self, batchsize=16):
         """Gets epoch size for given batchsize."""
 
@@ -294,6 +303,15 @@ class DataSet:
         ybatch = self.y_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
 
         return xbatch, ybatch
+
+    def slices(self, startpos, slicelen):
+        """Returns wraparound slices of x_onehots and y_onehots."""
+        # Get wraparound slices of dataset, since calc_loss doesn't update pos
+        idxs = range(startpos, startpos + slicelen)
+        x_slice = self.x_onehots.take(idxs, axis=0, mode='wrap')
+        y_slice = self.y_onehots.take(idxs, axis=0, mode='wrap')
+
+        return x_slice, y_slice
 
 
 class Checkpoint:
@@ -739,6 +757,12 @@ class ModelState:
             return False
 
         # Progress callback
+        # Try block for compatibility with older charsets which haven't done line starts
+        try:
+            tmpidx = self.chars.semirandomidx()
+        except AttributeError:
+            self.chars.findlinestarts(self.data.datastr)
+
         progress = printprogress(self.chars)
 
         # Get max length
@@ -774,13 +798,16 @@ class ModelState:
                 self.model.epoch, self.model.pos))
             stderr.flush()
 
+            '''
             # Get wraparound slices of dataset, since calc_loss doesn't update pos
             idxs = range(self.model.pos, self.model.pos + valid_for)
             x_slice = self.data.x_onehots.take(idxs, axis=0, mode='wrap')
             y_slice = self.data.y_onehots.take(idxs, axis=0, mode='wrap')
+            '''
 
             # Calculate loss with blank state
-            loss = self.model.calc_loss(x_slice, y_slice)
+            #loss = self.model.calc_loss(x_slice, y_slice)
+            loss = self.model.calc_loss(self.data, self.model.pos, batchsize=batchsize, num_examples=valid_len)
 
             stderr.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
 
@@ -808,7 +835,7 @@ class ModelState:
         time2 = time.time()
         timetaken = time2 - time1
 
-        stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, datalen))
+        stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
 
 

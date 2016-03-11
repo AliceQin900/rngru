@@ -20,7 +20,7 @@ class ModelParams:
     def savetofile(self, *args, **kwargs):
         pass
 
-    def calc_loss(self, X, Y, init_state=None):
+    def calc_loss_old(self, X, Y, init_state=None):
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
         errors = np.zeros(len(X))
 
@@ -32,7 +32,37 @@ class ModelParams:
         # Return total loss divided by number of characters in sample
         return np.sum(errors).item() / float(X.size / X.shape[-1])
 
-    def train(self, dataset, batchsize=0, num_examples=1000, callback_every=1000, callback=None, init_state=None):
+    def calc_loss(self, dataset, startpos, batchsize=0, num_examples=0, init_state=None):
+        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
+
+        if batchsize == 0:
+            # Get wraparound slices of dataset, since calc_loss doesn't update pos
+            x_slice, y_slice = dataset.slices(startpos, num_examples)
+
+            # Calculate loss old way with blank state
+            return self.model.calc_loss_old(x_slice, y_slice, init_state=step_state)
+        else:
+            data_len = dataset.batchepoch(batchsize)
+            valid_len = num_examples if num_examples else data_len
+            errors = np.zeros(valid_len)
+
+            # Use explicit indexing instead of fancy slicing so we can 
+            # roll over properly
+            data_pos = startpos
+            for valid_pos in range(valid_len):
+                xbatch, ybatch = dataset.batch(data_pos, batchsize)
+                errors[valid_pos], step_state = self.err_bat(xbatch, ybatch, step_state)
+                data_pos += 1
+                # Advance position and overflow
+                if data_pos >= data_len:
+                    data_pos = 0
+                    # Roll state vector on batch axis, to keep continuity
+                    step_state = np.roll(step_state, 1, axis=1)
+
+            # Return total loss divided by number of characters in sample
+            return np.sum(errors).item() / float(valid_len * batchsize * dataset.seq_len)
+
+    def train(self, dataset, batchsize=0, num_examples=0, callback_every=1000, callback=None, init_state=None):
         """Train model on given dataset for num_examples, with optional 
         batch size.
 
@@ -151,7 +181,8 @@ class ModelParams:
         if seedch:
             seedidx = charset.idxofchar(seedch)
         else:
-            seedidx = charset.randomidx()
+            seedidx = charset.semirandomidx()
+
         seedvec = charset.onehot(seedidx)
 
         # Get generated sequence

@@ -202,6 +202,13 @@ class GRUEncode(ModelParams):
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
 
+
+        # Costs
+
+        # NEW VERSION
+        # Since Theano's categorical cross-entropy function only works on matrices,
+        # the cross-entropy loss has been moved inside the scan, so we can keep the
+        # sequencing intact. (Slower, but seems to catch longer-term dependencies better?)
         def batch_step(x_t, y_t, s_t):
             o_t1, s_t = forward_step(x_t, s_t)
             # We can use the whole matrix from softmax for batches
@@ -216,8 +223,7 @@ class GRUEncode(ModelParams):
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
         s_out_bat = s_seq_bat[-1]
-
-        # Costs
+        cost_bat = T.sum(err_bat)
 
         # OLD VERSION
         # We have to reshape the outputs, since Theano's categorical cross-entropy
@@ -228,12 +234,6 @@ class GRUEncode(ModelParams):
         #y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
         #o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
         #cost_bat = T.sum(o_errs_bat)
-
-        # NEW VERSION
-        # Since Theano's categorical cross-entropy function only works on matrices,
-        # the cross-entropy loss has been moved inside the scan, so we can keep the
-        # sequencing intact. (Seems to be a bit faster, maybe?)
-        cost_bat = T.sum(err_bat)
 
         # Gradients
         dE_bat = T.grad(cost_bat, E)
