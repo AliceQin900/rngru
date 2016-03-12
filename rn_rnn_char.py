@@ -537,8 +537,8 @@ class ModelState:
                 stderr.write("Loaded model state from {0}\n".format(filename))
                 #modelstate.restore()
                 return modelstate
-        finally:
-            f.close()
+            finally:
+                f.close()
 
     def savetofile(self, savedir):
         """Saves model state to file in savedir.
@@ -772,6 +772,12 @@ class ModelState:
         if not self.model._built_t:
             self.model._build_t()
 
+        # Try block for compatibility with older charsets which haven't done line starts
+        try:
+            tmpidx = self.chars.semirandomidx()
+        except AttributeError:
+            self.chars.findlinestarts(self.data.datastr)
+
         # Progress callback
         progress = printprogress(self.chars)
 
@@ -788,7 +794,7 @@ class ModelState:
         if batchsize > 0:
             stdout.write(
                 "--------\n\nTraining for {0:d} examples with batch size {1:d}, effective epoch length {2:d}\n\n".format(
-                train_for, batchsize, datalen))
+                train_for * num_rounds, batchsize, datalen))
 
         # First sample
         if batchsize > 0:

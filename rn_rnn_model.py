@@ -468,12 +468,6 @@ class ModelParams:
         # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
 
-        # Try block for compatibility with older charsets which haven't done line starts
-        try:
-            tmpidx = self.chars.semirandomidx()
-        except AttributeError:
-            self.chars.findlinestarts(self.data.datastr)
-
         # Seed given or random character to start (as one-hot)
         if seedch:
             seedidx = charset.idxofchar(seedch)
