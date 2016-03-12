@@ -59,16 +59,6 @@ class ModelParams:
         pass
     def grad_bat(self, *args, **kwargs):
         pass
-    '''
-    def train_step(self, *args, **kwargs):
-        pass
-    def errs(self, *args, **kwargs):
-        pass
-    def err(self, *args, **kwargs):
-        pass
-    def grad(self, *args, **kwargs):
-        pass
-    '''
 
     # Cross-model definitions of generation functions
     def _build_g(self):
@@ -240,7 +230,7 @@ class ModelParams:
         # Error/cost calculations
         self.errs_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
-            outputs=[o_errs_bat, s_out_bat])
+            outputs=[o_errs_res, s_out_bat])
         self.err_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=[cost_bat, s_out_bat])
@@ -250,18 +240,6 @@ class ModelParams:
         self.grad_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=dparams_bat)
-
-        '''
-        self.errs = th.function(
-            inputs=[x, y, s_in], 
-            outputs=[o_errs, s_out])
-        self.err = th.function(
-            inputs=[x, y, s_in], 
-            outputs=[cost, s_out])
-        self.grad = th.function(
-            inputs=[x, y, s_in], 
-            outputs=dparams)
-        '''
 
         ### Whew, I think we're done! ###
         time2 = time.time()
