@@ -18,113 +18,205 @@ class GRUEncode(ModelParams):
     Softmax applied to final output.
     """
 
-    def __init__(self, hyper, epoch=0, pos=0, E=None, U=None, W=None, V=None, a=None, b=None, c=None):
+    # Parameter and rmsprop cache matrix names
+    pnames = ['E', 'a', 'U', 'W', 'b', 'V', 'c']
+    mnames = ['mE', 'ma', 'mU', 'mW', 'mb', 'mV', 'mc']
+
+    def __init__(self, hyper, epoch=0, pos=0, params=None):
         super(GRUEncode, self).__init__(hyper, epoch, pos)
+
+        if not params:
+            params = self._build_p()
+
+        # Initialize shared variables
+
+        # Parameter matrices
+        self.E, self.a, self.U, self.W, self.b, self.V, self.c = [ 
+            th.shared(name=p, value=params[p].astype(th.config.floatX)) 
+            for p in self.pnames ]
+
+        self.params = [self.E, self.a, self.U, self.W, self.b, self.V, self.c]
+
+        # rmsprop parameters
+        self.mE, self.ma, self.mU, self.mW, self.mb, self.mV, self.mc = [ 
+            th.shared(name=m, value=np.zeros_like(params[p]).astype(th.config.floatX)) 
+            for m, p in zip(self.mnames, self.pnames) ]
+
+        self.mparams = [self.mE, self.ma, self.mU, self.mW, self.mb, self.mV, self.mc]
+
+        # Build Theano generation functions
+        self._build_g()
+
+    def _build_p(self):
+        '''Initialize parameter matrices.'''
+
+        params = {}
 
         # Randomly initialize matrices if not provided
         # E, F, U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
-        # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        tE = E if isinstance(E, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (hyper.vocab_size, hyper.state_size))
+        params['E'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.vocab_size), np.sqrt(1.0/self.hyper.vocab_size), 
+            (self.hyper.vocab_size, self.hyper.state_size))
 
-        tU = U if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.layers*3, hyper.state_size, hyper.state_size))
+        params['U'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            (self.hyper.layers*3, self.hyper.state_size, self.hyper.state_size))
 
-        tW = W if isinstance(W, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.layers*3, hyper.state_size, hyper.state_size))
+        params['W'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            (self.hyper.layers*3, self.hyper.state_size, self.hyper.state_size))
 
-        tV = V if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.state_size, hyper.vocab_size))
+        params['V'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            (self.hyper.state_size, self.hyper.vocab_size))
 
         # Initialize bias matrices to zeroes
         # b gets 3x2D per layer, c is single 2D
-        ta = a if isinstance(a, np.ndarray) else np.zeros(hyper.state_size)
-        tb = b if isinstance(b, np.ndarray) else np.zeros((hyper.layers*3, hyper.state_size))
-        tc = c if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
+        params['a'] = np.zeros(self.hyper.state_size)
+        params['b'] = np.zeros((self.hyper.layers*3, self.hyper.state_size))
+        params['c'] = np.zeros(self.hyper.vocab_size)
 
-        # Shared variables
-        self.E = th.shared(name='E', value=tE.astype(th.config.floatX))
-        self.a = th.shared(name='a', value=ta.astype(th.config.floatX))
-        self.U = th.shared(name='U', value=tU.astype(th.config.floatX))
-        self.W = th.shared(name='W', value=tW.astype(th.config.floatX))
-        self.b = th.shared(name='b', value=tb.astype(th.config.floatX))
-        self.V = th.shared(name='V', value=tV.astype(th.config.floatX))
-        self.c = th.shared(name='c', value=tc.astype(th.config.floatX))
+        return params
 
-        # rmsprop parameters
-        self.mE = th.shared(name='mE', value=np.zeros_like(tE).astype(th.config.floatX))
-        self.ma = th.shared(name='ma', value=np.zeros_like(ta).astype(th.config.floatX))
-        self.mU = th.shared(name='mU', value=np.zeros_like(tU).astype(th.config.floatX))
-        self.mW = th.shared(name='mW', value=np.zeros_like(tW).astype(th.config.floatX))
-        self.mb = th.shared(name='mb', value=np.zeros_like(tb).astype(th.config.floatX))
-        self.mV = th.shared(name='mV', value=np.zeros_like(tV).astype(th.config.floatX))
-        self.mc = th.shared(name='mc', value=np.zeros_like(tc).astype(th.config.floatX))
+    # Forward propagation
+    def _forward_step(self, x_t, s_t):
+        """Input vector/matrix x(t) and state matrix s(t)."""
 
-        # Build Theano graph and add related attributes
-        stdout.write("Compiling Theano graph and functions...")
+        # Gradient clipping
+        E_c, a_c, U_c, W_c, b_c, V_c, c_c = [th.gradient.grad_clip(p, -5.0, 5.0) for p in self.params]
+        '''
+        E_c = th.gradient.grad_clip(self.E, -5.0, 5.0)
+        a_c = th.gradient.grad_clip(self.a, -5.0, 5.0)
+        U_c = th.gradient.grad_clip(self.U, -5.0, 5.0)
+        W_c = th.gradient.grad_clip(self.W, -5.0, 5.0)
+        b_c = th.gradient.grad_clip(self.b, -5.0, 5.0)
+        V_c = th.gradient.grad_clip(self.V, -5.0, 5.0)
+        c_c = th.gradient.grad_clip(self.c, -5.0, 5.0)
+        '''
+
+        # Initialize state to return
+        s_next = T.zeros_like(s_t)
+
+        # Vocab-to-state encoding layer
+        inout = T.tanh(T.dot(x_t, E_c) + a_c)
+
+        # Loop over GRU layers
+        for layer in range(self.hyper.layers):
+            # 3 matrices per layer
+            L = layer * 3
+            # Get previous state for this layer
+            s_prev = s_t[layer]
+            # Update gate
+            z = T.nnet.hard_sigmoid(T.dot(inout, U_c[L]) + T.dot(s_prev, W_c[L]) + b_c[L])
+            # Reset gate
+            r = T.nnet.hard_sigmoid(T.dot(inout, U_c[L+1]) + T.dot(s_prev, W_c[L+1]) + b_c[L+1])
+            # Candidate state
+            h = T.tanh(T.dot(inout, U_c[L+2]) + T.dot(r * s_prev, W_c[L+2]) + b_c[L+2])
+            # New state
+            s_new = (T.ones_like(z) - z) * h + z * s_prev
+            s_next = T.set_subtensor(s_next[layer], s_new)
+            # Update for next layer or final output (might add dropout here later)
+            inout = s_new
+
+        # Final output
+        o_t = T.dot(inout, V_c) + c_c
+        return o_t, s_next
+
+    def _build_g(self):
+        """Build Theano graph and define generation functions."""
+
+        stdout.write("Compiling generation functions...")
         stdout.flush()
         time1 = time.time()
-        self.__build_t__()
-        time2 = time.time()
-        stdout.write("done!\nCompilation took {0:.3f} s.\n".format(time2 - time1))
-        stdout.flush()
-
-    def __build_t__(self):
-        """Build Theano graph and define functions."""
-
-        # Constants(ish)
-        layers = self.hyper.layers
-        vocab_size = self.hyper.vocab_size
-        state_size = self.hyper.state_size
 
         # Local bindings for convenience
-        E, U, W, V, a, b, c = self.E, self.U, self.W, self.V, self.a, self.b, self.c
+        E, a, U, W, b, V, c = self.E, self.a, self.U, self.W, self.b, self.V, self.c
+        forward_step = self._forward_step
 
-        # Forward propagation
-        def forward_step(x_t, s_t):
-            """Input vector/matrix x(t) and state matrix s(t)."""
+        ### SEQUENCE GENERATION ###
 
-            # Gradient clipping
-            E_c = th.gradient.grad_clip(E, -5.0, 5.0)
-            a_c = th.gradient.grad_clip(a, -5.0, 5.0)
-            U_c = th.gradient.grad_clip(U, -5.0, 5.0)
-            W_c = th.gradient.grad_clip(W, -5.0, 5.0)
-            b_c = th.gradient.grad_clip(b, -5.0, 5.0)
-            V_c = th.gradient.grad_clip(V, -5.0, 5.0)
-            c_c = th.gradient.grad_clip(c, -5.0, 5.0)
+        x_in = T.vector('x_in')
+        s_in = T.matrix('s_in')
+        k = T.iscalar('k')
+        temperature = T.scalar('temperature')
 
-            # Initialize state to return
-            s_next = T.zeros_like(s_t)
+        rng = T.shared_randomstreams.RandomStreams(seed=int(
+            np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
+            * np.sum(self.c.get_value()) * 100000.0 + 123456789) % 4294967295)
 
-            # Vocab-to-state encoding layer
-            inout = T.tanh(T.dot(x_t, E_c) + a_c)
+        # Generate output sequence based on input single onehot and given state.
+        # Chooses output char by multinomial, and feeds back in for next step.
+        # Scaled by temperature parameter before softmax (temperature 1.0 leaves
+        # softmax output unchanged).
+        # Returns matrix of one-hot vectors
+        def generate_step(x_t, s_t, temp):
+            # Do next step
+            o_t1, s_t = forward_step(x_t, s_t)
 
-            # Loop over GRU layers
-            for layer in range(layers):
-                # 3 matrices per layer
-                L = layer * 3
-                # Get previous state for this layer
-                s_prev = s_t[layer]
-                # Update gate
-                z = T.nnet.hard_sigmoid(T.dot(inout, U_c[L]) + T.dot(s_prev, W_c[L]) + b_c[L])
-                # Reset gate
-                r = T.nnet.hard_sigmoid(T.dot(inout, U_c[L+1]) + T.dot(s_prev, W_c[L+1]) + b_c[L+1])
-                # Candidate state
-                h = T.tanh(T.dot(inout, U_c[L+2]) + T.dot(r * s_prev, W_c[L+2]) + b_c[L+2])
-                # New state
-                s_new = (T.ones_like(z) - z) * h + z * s_prev
-                s_next = T.set_subtensor(s_next[layer], s_new)
-                # Update for next layer or final output (might add dropout here later)
-                inout = s_new
+            # Get softmax
+            o_t2 = T.nnet.softmax(o_t1 / temp)[-1]
 
-            # Final output
-            o_t = T.dot(inout, V_c) + c_c
-            return o_t, s_next
+            # Randomly choose by multinomial distribution
+            o_rand = rng.multinomial(n=1, pvals=o_t2, dtype=th.config.floatX)
 
+            return o_rand, s_t
+
+        [o_chs, s_chs], genupdate = th.scan(
+            fn=generate_step,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            non_sequences=temperature,
+            n_steps=k)
+        s_ch = s_chs[-1]
+
+        self.gen_chars = th.function(
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.1)], 
+            outputs=[o_chs, s_ch], 
+            name='gen_chars', 
+            updates=genupdate)
+
+        # Chooses output char by argmax, and feeds back in
+        def generate_step_max(x_t, s_t):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Get softmax
+            o_t2 = T.nnet.softmax(o_t1)[-1]
+
+            # Now find selected index
+            o_idx = T.argmax(o_t2)
+
+            # Create one-hot
+            o_ret = T.zeros_like(o_t2)
+            o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
+
+            return o_ret, s_t1
+
+        [o_chms, s_chms], _ = th.scan(
+            fn=generate_step_max,
+            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
+            n_steps=k)
+        s_chm = s_chms[-1]
+
+        self.gen_chars_max = th.function(
+            inputs=[k, x_in, s_in], 
+            outputs=[o_chms, s_chm], 
+            name='gen_chars_max')
+
+        time2 = time.time()
+        stdout.write("done!\nCompilation took {0:.3f} s.\n\n".format(time2 - time1))
+        stdout.flush()
+        self._built_g = True
+
+    def _build_t(self):
+        """Build Theano graph and define training functions."""
+
+        stdout.write("Compiling training functions...")
+        stdout.flush()
+        time1 = time.time()
+
+        # Local bindings for convenience
+        E, a, U, W, b, V, c = self.E, self.a, self.U, self.W, self.b, self.V, self.c
+        forward_step = self._forward_step
 
         ### SINGLE-SEQUENCE TRAINING ###
 
@@ -194,14 +286,12 @@ class GRUEncode(ModelParams):
                 (self.mc, mc)],
             name = 'train_step')
 
-
         ### BATCH-SEQUENCE TRAINING ###
 
         # Batch Inputs
         x_bat = T.tensor3('x_bat')
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
-
 
         # Costs
 
@@ -287,106 +377,30 @@ class GRUEncode(ModelParams):
         # We'll use this at some point for gradient checking
         self.grad = th.function([x, y, s_in], [dE, da, dU, dW, db, dV, dc])
 
-
-        ### SEQUENCE GENERATION ###
-
-        x_in = T.vector('x_in')
-        k = T.iscalar('k')
-        temperature = T.scalar('temperature')
-
-        rng = T.shared_randomstreams.RandomStreams(seed=int(
-            np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
-            * np.sum(self.c.get_value()) * 100000.0 + 123456789) % 4294967295)
-
-        '''
-        # For debug
-        o_p1, s_p1 = forward_step(x_in, s_in)
-        self._single_step = th.function(
-            inputs=[x_in, s_in], 
-            outputs=[o_p1, s_p1],
-            name='_single_step')
-
-        '''
-        # Generate output sequence based on input single onehot and given state.
-        # Chooses output char by multinomial, and feeds back in for next step.
-        # Scaled by temperature parameter before softmax (temperature 1.0 leaves
-        # softmax output unchanged).
-        # Returns matrix of one-hot vectors
-        def generate_step(x_t, s_t, temp):
-            # Do next step
-            o_t1, s_t = forward_step(x_t, s_t)
-
-            # Get softmax
-            o_t2 = T.nnet.softmax(o_t1 / temp)[-1]
-
-            # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t2, dtype=th.config.floatX)
-
-            return o_rand, s_t
-
-        [o_chs, s_chs], genupdate = th.scan(
-            fn=generate_step,
-            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
-            non_sequences=temperature,
-            n_steps=k)
-        s_ch = s_chs[-1]
-
-        self.gen_chars = th.function(
-            inputs=[k, x_in, s_in, th.Param(temperature, default=0.1)], 
-            outputs=[o_chs, s_ch], 
-            name='gen_chars', 
-            updates=genupdate)
-
-        # Chooses output char by argmax, and feeds back in
-        def generate_step_max(x_t, s_t):
-            # Do next step
-            o_t1, s_t1 = forward_step(x_t, s_t)
-
-            # Get softmax
-            o_t2 = T.nnet.softmax(o_t1)[-1]
-
-            # Now find selected index
-            o_idx = T.argmax(o_t2)
-
-            # Create one-hot
-            o_ret = T.zeros_like(o_t2)
-            o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
-
-            return o_ret, s_t1
-
-        [o_chms, s_chms], _ = th.scan(
-            fn=generate_step_max,
-            outputs_info=[dict(initial=x_in), dict(initial=s_in)],
-            n_steps=k)
-        s_chm = s_chms[-1]
-
-        self.gen_chars_max = th.function(
-            inputs=[k, x_in, s_in], 
-            outputs=[o_chms, s_chm], 
-            name='gen_chars_max')
-
-        # Sequence generation alternative
-        # Predicted next char probability 
-        # (reqires recursive input to generate sequence)
-        #o_next = o[-1]
-        #self.predict_prob = th.function([x, s_in], [o_next, s_out])
-
         ### Whew, I think we're done! ###
+        time2 = time.time()
+        stdout.write("done!\nCompilation took {0:.3f} s.\n\n".format(time2 - time1))
+        stdout.flush()
+        self._built_t = True
 
     @classmethod
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
-            # Load matrices
-            p, E, U, W, V, a, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
+            #p, E, U, W, V, a, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
 
             # Extract hyperparams and position
-            params = pickle.loads(p.tobytes())
-            hyper, epoch, pos = params['hyper'], params['epoch'], params['pos']
+            p = f['p']
+            hparams = pickle.loads(p.tobytes())
+            hyper, epoch, pos = hparams['hyper'], hparams['epoch'], hparams['pos']
+
+            # Load matrices
+            pvalues = { n:f[n] for n in cls.pnames }
 
             # Create instance
-            model = cls(hyper, epoch, pos, E=E, U=U, W=W, V=V, a=a, b=b, c=c)
             if isinstance(infile, str):
                 stderr.write("Loaded model parameters from {0}\n".format(infile))
+            stderr.write("Rebuilding model...\n")
+            model = cls(hyper, epoch, pos, pvalues)
 
             return model
 
@@ -396,8 +410,13 @@ class GRUEncode(ModelParams):
             protocol=pickle.HIGHEST_PROTOCOL)
         p = np.fromstring(pklbytes, dtype=np.uint8)
 
+        # Gather parameter matrices and names
+        pvalues = { n:m.get_value() for m, n in zip(self.params, self.pnames) }
+
         # Now save params and matrices to file
         try:
+            np.savez(outfile, p=p, **pvalues)
+            '''
             np.savez(outfile, p=p, 
                 E=self.E.get_value(), 
                 U=self.U.get_value(), 
@@ -406,6 +425,7 @@ class GRUEncode(ModelParams):
                 a=self.a.get_value(), 
                 b=self.b.get_value(), 
                 c=self.c.get_value())
+            '''
         except OSError as e:
             raise e
         else:

@@ -457,7 +457,7 @@ class ModelState:
                 self.cpfile = None
 
     @classmethod
-    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUResize', *, seq_len=100, init_checkpoint=True, **kwargs):
+    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUEncode', *, seq_len=100, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
         Creates initial checkpoint after model creation if init_checkpoint is True.
         Additional keyword arguments are passed to HyperParams.
@@ -535,6 +535,7 @@ class ModelState:
                 return None
             else:
                 stderr.write("Loaded model state from {0}\n".format(filename))
+                modelstate.restore()
                 return modelstate
         finally:
             f.close()
@@ -644,13 +645,17 @@ class ModelState:
             return False
 
     def restore(self, checkpoint=None):
-        """Restores dataset and model params from specified checkpoint.
+        """Restores dataset and model params from specified checkpoint file.
         Defaults to stored checkpoint if none provided.
         """
 
         if checkpoint:
             # Checkpoint given, use that
-            cp = checkpoint
+            cp = Checkpoint.loadcheckpoint(checkpoint)
+            if cp:
+                self.cp = cp
+            else:
+                return False
         elif self.cp:
             # Try stored checkpoint
             cp = self.cp
@@ -732,8 +737,11 @@ class ModelState:
         if checkpointdir:
             # Get initial loss estimate
             stderr.write("Calculating initial loss estimate...\n")
-            loss_len = 1000 if len(self.data.x_onehots) >= 1000 else len(self.data.x_onehots)
-            loss = self.model.calc_loss(self.data.x_onehots[:loss_len], self.data.y_onehots[:loss_len])
+            
+            # We don't need anything fancy or long, just a rough baseline
+            loss_len = 100 if self.data.data_len >= 100 else self.data.data_len
+            loss = self.model.calc_loss(self.data, 0, batchsize=8, num_examples=loss_len)
+
             stderr.write("Initial loss: {0:.3f}\n".format(loss))
 
             # Take checkpoint
@@ -755,6 +763,11 @@ class ModelState:
         if not self.data or not self.model:
             stderr.write("Dataset and model parameters must be loaded before training!\n")
             return False
+
+        # Compile training functions if not already done
+        # First build training functions if not already done
+        if not self.model._built_t:
+            self.model._build_t()
 
         # Progress callback
         # Try block for compatibility with older charsets which haven't done line starts
@@ -817,6 +830,7 @@ class ModelState:
                 self.model.hyper.learnrate *= 0.5
                 stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
+            '''
             elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.97:
                 # Loss not decreasing fast enough, raise decay rate
                 self.model.hyper.decay = (1.0 + self.model.hyper.decay) / 2.0
@@ -825,6 +839,7 @@ class ModelState:
                     self.model.hyper.decay = 1.0 - 1e-6
                 stderr.write("Loss changed too little between validations, adjusted decay rate to {0:.6f}\n".format(
                     self.model.hyper.decay))
+            '''
 
             stderr.write("\n--------\n\n")
 

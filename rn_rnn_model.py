@@ -7,11 +7,16 @@ class ModelParams:
     """Base class for RNN variants.
     NOTE: Not intended to be instantiated!
     """
+    # Parameter and rmsprop cache matrix names
+    pnames = []
+    mnames = []
 
     def __init__(self, hyper, epoch=0, pos=0):
         self.hyper = hyper
         self.epoch = epoch
         self.pos = pos
+        self._built_g = False
+        self._built_t = False
 
     @classmethod
     def loadfromfile(cls, *args, **kwargs):
@@ -20,7 +25,7 @@ class ModelParams:
     def savetofile(self, *args, **kwargs):
         pass
 
-    def calc_loss_old(self, X, Y, init_state=None):
+    def _calc_loss_old(self, X, Y, init_state=None):
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
         errors = np.zeros(len(X))
 
@@ -40,7 +45,7 @@ class ModelParams:
             x_slice, y_slice = dataset.slices(startpos, num_examples)
 
             # Calculate loss old way with blank state
-            return self.model.calc_loss_old(x_slice, y_slice, init_state=step_state)
+            return self.model._calc_loss_old(x_slice, y_slice, init_state=step_state)
         else:
             data_len = dataset.batchepoch(batchsize)
             valid_len = num_examples if num_examples else data_len
@@ -74,8 +79,17 @@ class ModelParams:
 
         If num_examples is 0, will train for full epoch.
         """
+
+        # First build training functions if not already done
+        if not self._built_t:
+            self._build_t()
+
         input_len = dataset.batchepoch(batchsize) if batchsize > 0 else dataset.data_len
         train_len = num_examples if num_examples else input_len
+        if batchsize > 0:
+            stdout.write(
+                "--------\n\nTraining for {0:d} examples with batch size {1:d}, effective epoch length {2:d}\n\n".format(
+                train_len, batchsize, input_len))
 
         # Start with fresh state if none provided
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
