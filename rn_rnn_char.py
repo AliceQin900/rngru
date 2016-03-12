@@ -435,6 +435,7 @@ class ModelState:
         self.data = data
         self.modelfile = modelfile
         self.model = model
+        self.laststate = None
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -849,18 +850,18 @@ class ModelState:
 
             stdout.write("\n--------\n\n")
 
+            # Save training state for later
+            # With batched training, unless one trains for epochs equal to batch size,
+            # no one state vector will see the entire dataset, so we save between runs
+            # to keep continuity
+            self.laststate = train_state
+
             # Take checkpoint and print stats
             self.newcheckpoint(loss)
             self.cp.printstats(stdout)
 
         time2 = time.time()
         timetaken = time2 - time1
-
-        # Save training state for later
-        # With batched training, unless one trains for epochs equal to batch size,
-        # no one state vector will see the entire dataset, so we save between runs
-        # to keep continuity
-        self.laststate = train_state
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
