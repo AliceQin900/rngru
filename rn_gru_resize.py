@@ -1,5 +1,5 @@
-import datetime, pickle, random, time
-from sys import stdin, stdout, stderr
+#import datetime, pickle, random, time
+#from sys import stdin, stdout, stderr
 import numpy as np
 import theano as th
 import theano.tensor as T
@@ -18,68 +18,118 @@ class GRUResize(ModelParams):
     and softmax applied to final output.
     """
 
-    def __init__(self, hyper, epoch=0, pos=0, E=None, F=None, U=None, W=None, V=None, a=None, b=None, c=None):
+    # Parameter and rmsprop cache matrix names
+    pnames = ['E', 'F', 'a', 'U', 'W', 'b', 'V', 'c']
+    mnames = ['mE', 'mF', 'ma', 'mU', 'mW', 'mb', 'mV', 'mc']
+
+    def __init__(self, hyper, epoch=0, pos=0, params=None):
         super(GRUResize, self).__init__(hyper, epoch, pos)
+
+        if not params:
+            params = self._build_p()
+
+        # Initialize shared variables
+
+        # Parameter matrices
+        self.E, self.F, self.a, self.U, self.W, self.b, self.V, self.c = [
+            th.shared(name=p, value=params[p].astype(th.config.floatX)) 
+            for p in self.pnames ]
+
+        self.params = [self.E, self.F, self.a, self.U, self.W, self.b, self.V, self.c]
+
+        # rmsprop parameters
+        self.mE, self.mF, self.ma, self.mU, self.mW, self.mb, self.mV, self.mc = [ 
+            th.shared(name=m, value=np.zeros_like(params[p]).astype(th.config.floatX)) 
+            for m, p in zip(self.mnames, self.pnames) ]
+
+        self.mparams = [self.mE, self.mF, self.ma, self.mU, self.mW, self.mb, self.mV, self.mc]
+
+        # Build Theano generation functions
+        self._build_g()
+
+    def _build_p(self):
+        '''Initialize parameter matrices.'''
+
+        params = {}
 
         # Randomly initialize matrices if not provided
         # E, F, U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
-        # NOTE: as truth values of numpy arrays are ambiguous, explicit isinstance() used instead
-        tE = E if isinstance(E, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.vocab_size), np.sqrt(1.0/hyper.vocab_size), 
-            (3, hyper.vocab_size, hyper.state_size))
+        params['E'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.vocab_size), np.sqrt(1.0/self.hyper.vocab_size), 
+            (3, self.hyper.vocab_size, self.hyper.state_size))
 
-        tF = F if isinstance(F, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (3, hyper.state_size, hyper.state_size))
+        params['F'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            (3, self.hyper.state_size, self.hyper.state_size))
 
-        tU = U if isinstance(U, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
+        params['U'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            ((self.hyper.layers-1)*3, self.hyper.state_size, self.hyper.state_size))
 
-        tW = W if isinstance(W, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            ((hyper.layers-1)*3, hyper.state_size, hyper.state_size))
+        params['W'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            ((self.hyper.layers-1)*3, self.hyper.state_size, self.hyper.state_size))
 
-        tV = V if isinstance(V, np.ndarray) else np.random.uniform(
-            -np.sqrt(1.0/hyper.state_size), np.sqrt(1.0/hyper.state_size), 
-            (hyper.state_size, hyper.vocab_size))
+        params['V'] = np.random.uniform(
+            -np.sqrt(1.0/self.hyper.state_size), np.sqrt(1.0/self.hyper.state_size), 
+            (self.hyper.state_size, self.hyper.vocab_size))
 
         # Initialize bias matrices to zeroes
-        # b gets 3x2D per layer, c is single 2D
-        ta = a if isinstance(a, np.ndarray) else np.zeros((3, hyper.state_size))
-        tb = b if isinstance(b, np.ndarray) else np.zeros(((hyper.layers-1)*3, hyper.state_size))
-        tc = c if isinstance(c, np.ndarray) else np.zeros(hyper.vocab_size)
+        # a and b are 2D, c is 1D
+        params['a'] = np.zeros((3, self.hyper.state_size))
+        params['b'] = np.zeros(((self.hyper.layers-1)*3, self.hyper.state_size))
+        params['c'] = np.zeros(self.hyper.vocab_size)
 
-        # Shared variables
-        self.E = th.shared(name='E', value=tE.astype(th.config.floatX))
-        self.F = th.shared(name='F', value=tF.astype(th.config.floatX))
-        self.U = th.shared(name='U', value=tU.astype(th.config.floatX))
-        self.W = th.shared(name='W', value=tW.astype(th.config.floatX))
-        self.V = th.shared(name='V', value=tV.astype(th.config.floatX))
-        self.a = th.shared(name='a', value=ta.astype(th.config.floatX))
-        self.b = th.shared(name='b', value=tb.astype(th.config.floatX))
-        self.c = th.shared(name='c', value=tc.astype(th.config.floatX))
+        return params
 
-        # rmsprop parameters
-        self.mE = th.shared(name='mE', value=np.zeros_like(tE).astype(th.config.floatX))
-        self.mF = th.shared(name='mF', value=np.zeros_like(tF).astype(th.config.floatX))
-        self.mU = th.shared(name='mU', value=np.zeros_like(tU).astype(th.config.floatX))
-        self.mW = th.shared(name='mW', value=np.zeros_like(tW).astype(th.config.floatX))
-        self.mV = th.shared(name='mV', value=np.zeros_like(tV).astype(th.config.floatX))
-        self.ma = th.shared(name='ma', value=np.zeros_like(ta).astype(th.config.floatX))
-        self.mb = th.shared(name='mb', value=np.zeros_like(tb).astype(th.config.floatX))
-        self.mc = th.shared(name='mc', value=np.zeros_like(tc).astype(th.config.floatX))
+    # Forward propagation
+    def _forward_step(self, x_t, s_t):
+        """Input vector/matrix x(t) and state matrix s(t)."""
 
-        # Build Theano graph and add related attributes
-        self.theano = {}
-        stdout.write("Compiling Theano graph and functions...")
-        stdout.flush()
-        time1 = time.time()
-        self.__build_t__()
-        time2 = time.time()
-        stdout.write("done!\nCompilation took {0:.3f} s.\n".format(time2 - time1))
-        stdout.flush()
+        # Gradient clipping
+        E, F, a, U, W, b, V, c = [th.gradient.grad_clip(p, -5.0, 5.0) for p in self.params]
 
+        # Initialize state to return
+        s_next = T.zeros_like(s_t)
+
+        # Input GRU layer
+        # Get previous state for this layer
+        s_prev = s_t[0]
+        # Update gate
+        z = T.nnet.hard_sigmoid(T.dot(x_t, E[0]) + T.dot(s_prev, F[0]) + a[0])
+        # Reset gate
+        r = T.nnet.hard_sigmoid(T.dot(x_t, E[1]) + T.dot(s_prev, F[1]) + a[1])
+        # Candidate state
+        h = T.tanh(T.dot(x_t, E[2]) + T.dot(r * s_prev, F[2]) + a[2])
+        # New state
+        s_new = (T.ones_like(z) - z) * h + z * s_prev
+        s_next = T.set_subtensor(s_next[0], s_new)
+        # Update for next layer (might add dropout here later)
+        inout = s_new
+
+        # Loop over subsequent GRU layers
+        for layer in range(1, self.hyper.layers):
+            # 3 matrices per layer
+            L = (layer-1) * 3
+            # Get previous state for this layer
+            s_prev = s_t[layer]
+            # Update gate
+            z = T.nnet.hard_sigmoid(T.dot(inout, U[L]) + T.dot(s_prev, W[L]) + b[L])
+            # Reset gate
+            r = T.nnet.hard_sigmoid(T.dot(inout, U[L+1]) + T.dot(s_prev, W[L+1]) + b[L+1])
+            # Candidate state
+            h = T.tanh(T.dot(inout, U[L+2]) + T.dot(r * s_prev, W[L+2]) + b[L+2])
+            # New state
+            s_new = (T.ones_like(z) - z) * h + z * s_prev
+            s_next = T.set_subtensor(s_next[layer], s_new)
+            # Update for next layer or final output (might add dropout here later)
+            inout = s_new
+
+        # Final output
+        o_t = T.dot(inout, V) + c
+        return o_t, s_next
+
+'''
     def __build_t__(self):
         """Build Theano graph and define functions."""
 
@@ -90,60 +140,6 @@ class GRUResize(ModelParams):
 
         # Local bindings for convenience
         E, F, U, W, V, a, b, c = self.E, self.F, self.U, self.W, self.V, self.a, self.b, self.c
-
-        # Forward propagation
-        def forward_step(x_t, s_t):
-            """Input vector/matrix x(t) and state matrix s(t)."""
-
-            # Gradient clipping
-            E_c = th.gradient.grad_clip(E, -5.0, 5.0)
-            F_c = th.gradient.grad_clip(F, -5.0, 5.0)
-            U_c = th.gradient.grad_clip(U, -5.0, 5.0)
-            W_c = th.gradient.grad_clip(W, -5.0, 5.0)
-            V_c = th.gradient.grad_clip(V, -5.0, 5.0)
-            a_c = th.gradient.grad_clip(a, -5.0, 5.0)
-            b_c = th.gradient.grad_clip(b, -5.0, 5.0)
-            c_c = th.gradient.grad_clip(c, -5.0, 5.0)
-
-            # Initialize state to return
-            s_next = T.zeros_like(s_t)
-
-            # Vocab-to-state GRU layer
-            # Get previous state for this layer
-            s_prev = s_t[0]
-            # Update gate
-            z = T.nnet.hard_sigmoid(T.dot(x_t, E_c[0]) + T.dot(s_prev, F_c[0]) + a_c[0])
-            # Reset gate
-            r = T.nnet.hard_sigmoid(T.dot(x_t, E_c[1]) + T.dot(s_prev, F_c[1]) + a_c[1])
-            # Candidate state
-            h = T.tanh(T.dot(x_t, E_c[2]) + T.dot(r * s_prev, F_c[2]) + a_c[2])
-            # New state
-            s_new = (T.ones_like(z) - z) * h + z * s_prev
-            s_next = T.set_subtensor(s_next[0], s_new)
-            # Update for next layer (might add dropout here later)
-            inout = s_new
-
-            # Loop over subsequent GRU layers
-            for layer in range(1, layers):
-                # 3 matrices per layer
-                L = (layer-1) * 3
-                # Get previous state for this layer
-                s_prev = s_t[layer]
-                # Update gate
-                z = T.nnet.hard_sigmoid(T.dot(inout, U_c[L]) + T.dot(s_prev, W_c[L]) + b_c[L])
-                # Reset gate
-                r = T.nnet.hard_sigmoid(T.dot(inout, U_c[L+1]) + T.dot(s_prev, W_c[L+1]) + b_c[L+1])
-                # Candidate state
-                h = T.tanh(T.dot(inout, U_c[L+2]) + T.dot(r * s_prev, W_c[L+2]) + b_c[L+2])
-                # New state
-                s_new = (T.ones_like(z) - z) * h + z * s_prev
-                s_next = T.set_subtensor(s_next[layer], s_new)
-                # Update for next layer or final output (might add dropout here later)
-                inout = s_new
-
-            # Final output
-            o_t = T.dot(inout, V_c) + c_c
-            return o_t, s_next
 
 
         ### SINGLE-SEQUENCE TRAINING ###
@@ -316,7 +312,6 @@ class GRUResize(ModelParams):
             np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
             * np.sum(self.c.get_value()) * 100000.0) % 4294967295)
 
-        '''
         # For debug
         o_p1, s_p1 = forward_step(x_in, s_in)
         self._single_step = th.function(
@@ -324,7 +319,6 @@ class GRUResize(ModelParams):
             outputs=[o_p1, s_p1],
             name='_single_step')
 
-        '''
         # Generate output sequence based on input single onehot and given state.
         # Chooses output char by multinomial, and feeds back in for next step.
         # Scaled by temperature parameter before softmax (temperature 1.0 leaves
@@ -437,4 +431,4 @@ class GRUResize(ModelParams):
             return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
         else:
             return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
-
+'''

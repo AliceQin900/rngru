@@ -1,5 +1,5 @@
-import datetime, pickle, random, time
-from sys import stdin, stdout, stderr
+#import datetime, pickle, random, time
+#from sys import stdin, stdout, stderr
 import numpy as np
 import theano as th
 import theano.tensor as T
@@ -53,7 +53,7 @@ class GRUEncode(ModelParams):
         params = {}
 
         # Randomly initialize matrices if not provided
-        # E, F, U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
+        # U, W get 3 2D matrices per layer (reset and update gates plus hidden state)
         params['E'] = np.random.uniform(
             -np.sqrt(1.0/self.hyper.vocab_size), np.sqrt(1.0/self.hyper.vocab_size), 
             (self.hyper.vocab_size, self.hyper.state_size))
@@ -83,22 +83,13 @@ class GRUEncode(ModelParams):
         """Input vector/matrix x(t) and state matrix s(t)."""
 
         # Gradient clipping
-        E_c, a_c, U_c, W_c, b_c, V_c, c_c = [th.gradient.grad_clip(p, -5.0, 5.0) for p in self.params]
-        '''
-        E_c = th.gradient.grad_clip(self.E, -5.0, 5.0)
-        a_c = th.gradient.grad_clip(self.a, -5.0, 5.0)
-        U_c = th.gradient.grad_clip(self.U, -5.0, 5.0)
-        W_c = th.gradient.grad_clip(self.W, -5.0, 5.0)
-        b_c = th.gradient.grad_clip(self.b, -5.0, 5.0)
-        V_c = th.gradient.grad_clip(self.V, -5.0, 5.0)
-        c_c = th.gradient.grad_clip(self.c, -5.0, 5.0)
-        '''
+        E, a, U, W, b, V, c = [th.gradient.grad_clip(p, -5.0, 5.0) for p in self.params]
 
         # Initialize state to return
         s_next = T.zeros_like(s_t)
 
         # Vocab-to-state encoding layer
-        inout = T.tanh(T.dot(x_t, E_c) + a_c)
+        inout = T.tanh(T.dot(x_t, E) + a)
 
         # Loop over GRU layers
         for layer in range(self.hyper.layers):
@@ -107,11 +98,11 @@ class GRUEncode(ModelParams):
             # Get previous state for this layer
             s_prev = s_t[layer]
             # Update gate
-            z = T.nnet.hard_sigmoid(T.dot(inout, U_c[L]) + T.dot(s_prev, W_c[L]) + b_c[L])
+            z = T.nnet.hard_sigmoid(T.dot(inout, U[L]) + T.dot(s_prev, W[L]) + b[L])
             # Reset gate
-            r = T.nnet.hard_sigmoid(T.dot(inout, U_c[L+1]) + T.dot(s_prev, W_c[L+1]) + b_c[L+1])
+            r = T.nnet.hard_sigmoid(T.dot(inout, U[L+1]) + T.dot(s_prev, W[L+1]) + b[L+1])
             # Candidate state
-            h = T.tanh(T.dot(inout, U_c[L+2]) + T.dot(r * s_prev, W_c[L+2]) + b_c[L+2])
+            h = T.tanh(T.dot(inout, U[L+2]) + T.dot(r * s_prev, W[L+2]) + b[L+2])
             # New state
             s_new = (T.ones_like(z) - z) * h + z * s_prev
             s_next = T.set_subtensor(s_next[layer], s_new)
@@ -119,9 +110,10 @@ class GRUEncode(ModelParams):
             inout = s_new
 
         # Final output
-        o_t = T.dot(inout, V_c) + c_c
+        o_t = T.dot(inout, V) + c
         return o_t, s_next
 
+'''
     def _build_g(self):
         """Build Theano graph and define generation functions."""
 
@@ -129,8 +121,7 @@ class GRUEncode(ModelParams):
         stdout.flush()
         time1 = time.time()
 
-        # Local bindings for convenience
-        E, a, U, W, b, V, c = self.E, self.a, self.U, self.W, self.b, self.V, self.c
+        # Local binding for convenience
         forward_step = self._forward_step
 
         ### SEQUENCE GENERATION ###
@@ -214,8 +205,7 @@ class GRUEncode(ModelParams):
         stdout.flush()
         time1 = time.time()
 
-        # Local bindings for convenience
-        E, a, U, W, b, V, c = self.E, self.a, self.U, self.W, self.b, self.V, self.c
+        # Local binding for convenience
         forward_step = self._forward_step
 
         ### SINGLE-SEQUENCE TRAINING ###
@@ -246,44 +236,28 @@ class GRUEncode(ModelParams):
         cost = o_err
 
         # Gradients
-        dE = T.grad(cost, E)
-        da = T.grad(cost, a)
-        dU = T.grad(cost, U)
-        dW = T.grad(cost, W)
-        db = T.grad(cost, b)
-        dV = T.grad(cost, V)
-        dc = T.grad(cost, c)
+        dparams = [ T.grad(cost, p) for p in self.params ]
 
         # rmsprop parameter updates
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
-        mE = decayrate * self.mE + (1 - decayrate) * dE ** 2
-        ma = decayrate * self.ma + (1 - decayrate) * da ** 2
-        mU = decayrate * self.mU + (1 - decayrate) * dU ** 2
-        mW = decayrate * self.mW + (1 - decayrate) * dW ** 2
-        mb = decayrate * self.mb + (1 - decayrate) * db ** 2
-        mV = decayrate * self.mV + (1 - decayrate) * dV ** 2
-        mc = decayrate * self.mc + (1 - decayrate) * dc ** 2
+
+        uparams = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams, dparams) ]
+
+        # Gather updates
+        train_updates = OrderedDict()
+        # Apply rmsprop updates to parameters
+        for p, dp, up in zip(self.params, dparams, uparams):
+            train_updates[p] = p - learnrate * dp / T.sqrt(up + 1e-6)
+        # Update rmsprop caches
+        for mp, up in zip(self.mparams, uparams):
+            train_updates[mp] = up
 
         # Training step function
         self.train_step = th.function(
-            [x, y, s_in, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
-            s_out,
-            updates=[
-                (E, E - learnrate * dE / T.sqrt(mE + 1e-6)),
-                (a, a - learnrate * da / T.sqrt(ma + 1e-6)),
-                (U, U - learnrate * dU / T.sqrt(mU + 1e-6)),
-                (W, W - learnrate * dW / T.sqrt(mW + 1e-6)),
-                (b, b - learnrate * db / T.sqrt(mb + 1e-6)),
-                (V, V - learnrate * dV / T.sqrt(mV + 1e-6)),
-                (c, c - learnrate * dc / T.sqrt(mc + 1e-6)),
-                (self.mE, mE),
-                (self.ma, ma),
-                (self.mU, mU),
-                (self.mW, mW),
-                (self.mb, mb),
-                (self.mV, mV),
-                (self.mc, mc)],
+            inputs=[x, y, s_in, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
+            outputs=s_out,
+            updates=train_updates,
             name = 'train_step')
 
         ### BATCH-SEQUENCE TRAINING ###
@@ -307,13 +281,13 @@ class GRUEncode(ModelParams):
             e_t = T.sum(T.nnet.categorical_crossentropy(o_t2, y_t))
             return e_t, s_t
 
-        [err_bat, s_seq_bat], _ = th.scan(
+        [o_errs_bat, s_seq_bat], _ = th.scan(
             batch_step, 
             sequences=[x_bat, y_bat], 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
         s_out_bat = s_seq_bat[-1]
-        cost_bat = T.sum(err_bat)
+        cost_bat = T.sum(o_errs_bat)
 
         # OLD VERSION
         # We have to reshape the outputs, since Theano's categorical cross-entropy
@@ -326,56 +300,51 @@ class GRUEncode(ModelParams):
         #cost_bat = T.sum(o_errs_bat)
 
         # Gradients
-        dE_bat = T.grad(cost_bat, E)
-        da_bat = T.grad(cost_bat, a)
-        dU_bat = T.grad(cost_bat, U)
-        dW_bat = T.grad(cost_bat, W)
-        db_bat = T.grad(cost_bat, b)
-        dV_bat = T.grad(cost_bat, V)
-        dc_bat = T.grad(cost_bat, c)
+        dparams_bat = [ T.grad(cost_bat, p) for p in self.params ]
 
         # rmsprop parameter updates
-        mE_bat = decayrate * self.mE + (1 - decayrate) * dE_bat ** 2
-        ma_bat = decayrate * self.ma + (1 - decayrate) * da_bat ** 2
-        mU_bat = decayrate * self.mU + (1 - decayrate) * dU_bat ** 2
-        mW_bat = decayrate * self.mW + (1 - decayrate) * dW_bat ** 2
-        mb_bat = decayrate * self.mb + (1 - decayrate) * db_bat ** 2
-        mV_bat = decayrate * self.mV + (1 - decayrate) * dV_bat ** 2
-        mc_bat = decayrate * self.mc + (1 - decayrate) * dc_bat ** 2
+        uparams_bat = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams, dparams_bat) ]
+
+        # Gather updates
+        train_updates_bat = OrderedDict()
+        # Apply rmsprop updates to parameters
+        for p, dp, up in zip(self.params, dparams_bat, uparams_bat):
+            train_updates_bat[p] = p - learnrate * dp / T.sqrt(up + 1e-6)
+        # Update rmsprop caches
+        for mp, up in zip(self.mparams, uparams_bat):
+            train_updates_bat[mp] = up
 
         # Batch training step function
         self.train_step_bat = th.function(
-            [x_bat, y_bat, s_in_bat, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
-            s_out_bat,
-            updates=[
-                (E, E - learnrate * dE_bat / T.sqrt(mE_bat + 1e-6)),
-                (a, a - learnrate * da_bat / T.sqrt(ma_bat + 1e-6)),
-                (U, U - learnrate * dU_bat / T.sqrt(mU_bat + 1e-6)),
-                (W, W - learnrate * dW_bat / T.sqrt(mW_bat + 1e-6)),
-                (b, b - learnrate * db_bat / T.sqrt(mb_bat + 1e-6)),
-                (V, V - learnrate * dV_bat / T.sqrt(mV_bat + 1e-6)),
-                (c, c - learnrate * dc_bat / T.sqrt(mc_bat + 1e-6)),
-                (self.mE, mE_bat),
-                (self.ma, ma_bat),
-                (self.mU, mU_bat),
-                (self.mW, mW_bat),
-                (self.mb, mb_bat),
-                (self.mV, mV_bat),
-                (self.mc, mc_bat)],
-            name = 'train_step_bat')
-
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
+            outputs=s_out_bat,
+            updates=train_updates_bat,
+            name='train_step_bat')
 
         ### ERROR CHECKING ###
 
         # Error/cost calculations
-        self.errs = th.function([x, y, s_in], [o_errs, s_out])
-        #self.errs_bat = th.function([x_bat, y_bat, s_in_bat], [o_errs_bat, s_out_bat])
-        self.err = th.function([x, y, s_in], [cost, s_out])
-        self.err_bat = th.function([x_bat, y_bat, s_in_bat], [cost_bat, s_out_bat])
+        self.errs = th.function(
+            inputs=[x, y, s_in], 
+            outputs=[o_errs, s_out])
+        self.errs_bat = th.function(
+            inputs=[x_bat, y_bat, s_in_bat], 
+            outputs=[o_errs_bat, s_out_bat])
+        self.err = th.function(
+            inputs=[x, y, s_in], 
+            outputs=[cost, s_out])
+        self.err_bat = th.function(
+            inputs=[x_bat, y_bat, s_in_bat], 
+            outputs=[cost_bat, s_out_bat])
 
         # Gradient calculations
         # We'll use this at some point for gradient checking
-        self.grad = th.function([x, y, s_in], [dE, da, dU, dW, db, dV, dc])
+        self.grad = th.function(
+            inputs=[x, y, s_in], 
+            outputs=dparams)
+        self.grad_bat = th.function(
+            inputs=[x_bat, y_bat, s_in_bat], 
+            outputs=dparams_bat)
 
         ### Whew, I think we're done! ###
         time2 = time.time()
@@ -386,8 +355,6 @@ class GRUEncode(ModelParams):
     @classmethod
     def loadfromfile(cls, infile):
         with np.load(infile) as f:
-            #p, E, U, W, V, a, b, c = f['p'], f['E'], f['U'], f['W'], f['V'], f['a'], f['b'], f['c']
-
             # Extract hyperparams and position
             p = f['p']
             hparams = pickle.loads(p.tobytes())
@@ -398,8 +365,8 @@ class GRUEncode(ModelParams):
 
             # Create instance
             if isinstance(infile, str):
-                stderr.write("Loaded model parameters from {0}\n".format(infile))
-            stderr.write("Rebuilding model...\n")
+                stdout.write("Loaded model parameters from {0}\n".format(infile))
+            stdout.write("Rebuilding model...\n")
             model = cls(hyper, epoch, pos, pvalues)
 
             return model
@@ -416,25 +383,15 @@ class GRUEncode(ModelParams):
         # Now save params and matrices to file
         try:
             np.savez(outfile, p=p, **pvalues)
-            '''
-            np.savez(outfile, p=p, 
-                E=self.E.get_value(), 
-                U=self.U.get_value(), 
-                W=self.W.get_value(), 
-                V=self.V.get_value(), 
-                a=self.a.get_value(), 
-                b=self.b.get_value(), 
-                c=self.c.get_value())
-            '''
         except OSError as e:
             raise e
         else:
             if isinstance(outfile, str):
-                stderr.write("Saved model parameters to {0}\n".format(outfile))
+                stdout.write("Saved model parameters to {0}\n".format(outfile))
 
     def freshstate(self, batchsize=0):
         if batchsize > 0:
             return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
         else:
             return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
-
+'''

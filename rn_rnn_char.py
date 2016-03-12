@@ -230,7 +230,7 @@ class DataSet:
             return None
         else:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-            stderr.write("Saved data set to {0}\n".format(filename))
+            stderr.write("Saved data set to {0}\n\n".format(filename))
             return filename
         finally:
             f.close()
@@ -273,7 +273,7 @@ class DataSet:
 
         time2 = time.time()
 
-        stderr.write("done! Took {0:.4f} ms.\n".format((time2 - time1) * 1000.0))
+        stderr.write("done!\nTook {0:.4f} ms.\n".format((time2 - time1) * 1000.0))
 
     def batchepoch(self, batchsize=16):
         """Gets epoch size for given batchsize."""
@@ -535,7 +535,7 @@ class ModelState:
                 return None
             else:
                 stderr.write("Loaded model state from {0}\n".format(filename))
-                modelstate.restore()
+                #modelstate.restore()
                 return modelstate
         finally:
             f.close()
@@ -735,6 +735,9 @@ class ModelState:
         self.model = useclass(hyper)
 
         if checkpointdir:
+            # Compile training functions
+            self.model._build_t()
+
             # Get initial loss estimate
             stderr.write("Calculating initial loss estimate...\n")
             
@@ -770,12 +773,6 @@ class ModelState:
             self.model._build_t()
 
         # Progress callback
-        # Try block for compatibility with older charsets which haven't done line starts
-        try:
-            tmpidx = self.chars.semirandomidx()
-        except AttributeError:
-            self.chars.findlinestarts(self.data.datastr)
-
         progress = printprogress(self.chars)
 
         # Get max length
@@ -786,6 +783,12 @@ class ModelState:
 
         # Start with a blank state
         train_state = self.model.freshstate(batchsize)
+
+        # Print start message
+        if batchsize > 0:
+            stdout.write(
+                "--------\n\nTraining for {0:d} examples with batch size {1:d}, effective epoch length {2:d}\n\n".format(
+                train_for, batchsize, datalen))
 
         # First sample
         if batchsize > 0:
@@ -807,9 +810,9 @@ class ModelState:
                 init_state=train_state)
 
             # Calc loss
-            stderr.write("--------\n\nCalculating loss (epoch {0:d}, pos {1:d})...\n".format(
+            stdout.write("--------\n\nCalculating loss (epoch {0:d}, pos {1:d})...\n".format(
                 self.model.epoch, self.model.pos))
-            stderr.flush()
+            stdout.flush()
 
             '''
             # Get wraparound slices of dataset, since calc_loss doesn't update pos
@@ -822,13 +825,13 @@ class ModelState:
             #loss = self.model.calc_loss(x_slice, y_slice)
             loss = self.model.calc_loss(self.data, self.model.pos, batchsize=batchsize, num_examples=valid_len)
 
-            stderr.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
+            stdout.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
 
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 # Loss increasing, lower learning rate
                 self.model.hyper.learnrate *= 0.5
-                stderr.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
+                stdout.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
             '''
             elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.97:
@@ -837,11 +840,11 @@ class ModelState:
                 # Just in case (shouldn't happen, but you know floating points...)
                 if self.model.hyper.decay >= 1.0:
                     self.model.hyper.decay = 1.0 - 1e-6
-                stderr.write("Loss changed too little between validations, adjusted decay rate to {0:.6f}\n".format(
+                stdout.write("Loss changed too little between validations, adjusted decay rate to {0:.6f}\n".format(
                     self.model.hyper.decay))
             '''
 
-            stderr.write("\n--------\n\n")
+            stdout.write("\n--------\n\n")
 
             # Take checkpoint and print stats
             self.newcheckpoint(loss)
@@ -869,3 +872,4 @@ def printprogress(charset):
 
 # TODO: Non-Theano sigmoid
 # TODO: Non-Theano softmax
+# TODO: Command-line options for generation, training
