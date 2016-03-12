@@ -266,14 +266,11 @@ class DataSet:
 
         time1 = time.time()
 
-        # numpy fancy indexing is fun!
-        x_onehots = np.eye(vocab, dtype=th.config.floatX)[self.x_array]
-        y_onehots = np.eye(vocab, dtype=th.config.floatX)[self.y_array]
-
         # These can be large, so we don't necessarily want them on the GPU
         # Thus they're not Theano shared vars
-        self.x_onehots = x_onehots #.astype(th.config.floatX)
-        self.y_onehots = y_onehots #.astype(th.config.floatX)
+        # Also, numpy fancy indexing is fun!
+        self.x_onehots = np.eye(vocab, dtype=th.config.floatX)[self.x_array]
+        self.y_onehots = np.eye(vocab, dtype=th.config.floatX)[self.y_array]
 
         time2 = time.time()
 
@@ -544,7 +541,7 @@ class ModelState:
             finally:
                 f.close()
 
-    def savetofile(self, savedir):
+    def savetofile(self, savedir=None):
         """Saves model state to file in savedir.
         Filename taken from srcinfo if possible, otherwise defaults to 'modelstate.p'.
         Returns filename if successful, None otherwise.
@@ -754,7 +751,7 @@ class ModelState:
             # Take checkpoint
             self.newcheckpoint(loss, savedir=checkpointdir)
 
-    def trainmodel(self, num_rounds=1, batchsize=0, train_len=0, valid_len=0, print_every=1000):
+    def trainmodel(self, num_rounds=1, batchsize=16, train_len=0, valid_len=0, print_every=1000, clear_state=False):
         """Train loaded model for num_rounds of train_len, printing
         progress every print_every examples, calculating loss using 
         valid_len examples, and creating a checkpoint after each round.
@@ -788,11 +785,14 @@ class ModelState:
         # Get max length
         datalen = self.data.batchepoch(batchsize) if batchsize > 0 else self.data.data_len
         train_for = train_len if train_len else datalen
-        # Validation isn't batched, so use full data range if nothing passed
-        valid_for = valid_len if valid_len else self.data.data_len
+        valid_for = valid_len if valid_len else datalen
 
-        # Start with a blank state
-        train_state = self.model.freshstate(batchsize)
+        # Start with a blank state if specified, none stored, or wrong shape for batch size
+        fresh_state = self.model.freshstate(batchsize)
+        if clear_state or not hasattr(self, 'laststate') or self.laststate.shape != fresh_state.shape:
+            train_state = fresh_state
+        else:
+            train_state = self.laststate
 
         # Print start message
         if batchsize > 0:
@@ -824,13 +824,6 @@ class ModelState:
                 self.model.epoch, self.model.pos))
             stdout.flush()
 
-            '''
-            # Get wraparound slices of dataset, since calc_loss doesn't update pos
-            idxs = range(self.model.pos, self.model.pos + valid_for)
-            x_slice = self.data.x_onehots.take(idxs, axis=0, mode='wrap')
-            y_slice = self.data.y_onehots.take(idxs, axis=0, mode='wrap')
-            '''
-
             # Calculate loss with blank state
             #loss = self.model.calc_loss(x_slice, y_slice)
             loss = self.model.calc_loss(self.data, self.model.pos, batchsize=batchsize, num_examples=valid_len)
@@ -840,7 +833,7 @@ class ModelState:
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 # Loss increasing, lower learning rate
-                self.model.hyper.learnrate *= 0.5
+                self.model.hyper.learnrate *= 0.8
                 stdout.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
             '''
@@ -862,6 +855,12 @@ class ModelState:
 
         time2 = time.time()
         timetaken = time2 - time1
+
+        # Save training state for later
+        # With batched training, unless one trains for epochs equal to batch size,
+        # no one state vector will see the entire dataset, so we save between runs
+        # to keep continuity
+        self.laststate = train_state
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
