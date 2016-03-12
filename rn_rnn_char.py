@@ -493,7 +493,7 @@ class ModelState:
 
         # Now find character set
         # TODO: change to let CharSet get chars from string, with frequencies and line beginnings
-        charset = CharSet(set(datastr), srcinfo=(basename + "-chars"))
+        charset = CharSet(datastr, srcinfo=(basename + "-chars"))
 
         # And set hyperparameters (additional keyword args passed through)
         hyperparams = HyperParams(charset.vocab_size, **kwargs)
