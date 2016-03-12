@@ -134,24 +134,21 @@ class ModelParams:
             return o_t2, s_t
 
         # Now get Theano to do the heavy lifting
+        # Costs
         [o, s_seq], _ = th.scan(
             single_step, 
             sequences=x, 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in)])
         s_out = s_seq[-1]
-
-        # Costs
         o_errs = T.nnet.categorical_crossentropy(o, y)
-        o_err = T.sum(o_errs)
         # Should regularize at some point
-        cost = o_err
+        cost = T.sum(o_errs)
 
         # Gradients
         dparams = [ T.grad(cost, p) for p in self.params ]
 
         # rmsprop parameter updates
-
         uparams = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams, dparams) ]
 
         # Gather updates

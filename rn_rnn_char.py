@@ -31,19 +31,6 @@ class CharSet:
 
     unknown_char='�'    # Standard Python replacement char for invalid Unicode values
 
-    @classmethod
-    def _linefinder(cls, datastr):
-        '''Iterator over datastr, finding characters that start lines.'''
-        start = 0
-        maxidx = len(datastr) - 1
-        while True:
-            start = datastr.find('\n', start)
-            if start == -1:
-                return
-            elif start < maxidx and datastr[start+1] not in '\n\r�':
-                yield datastr[start+1]
-            start += 1
-
     def __init__(self, datastr, srcinfo=None):
         '''Creates a new CharSet object from a given sequence.
         Parameter datastr should be a string or list of chars.
@@ -52,6 +39,7 @@ class CharSet:
         self.srcinfo = srcinfo
 
         # Find set of chars in supplied sequence
+        # TODO: sort by frequency?
         chars = set(datastr)
 
         # Create temp list (mutable), starting with unknown
@@ -68,7 +56,23 @@ class CharSet:
         # Now we can set vocab size
         self.vocab_size = len(self._char_to_idx)
 
+        # Find characters that begin lines
+        self.findlinestarts(datastr)
+
         stderr.write("Initialized character set, size: {0:d}\n".format(self.vocab_size))
+
+    @classmethod
+    def _linefinder(cls, datastr):
+        '''Iterator over datastr, finding characters that start lines.'''
+        start = 0
+        maxidx = len(datastr) - 1
+        while True:
+            start = datastr.find('\n', start)
+            if start == -1:
+                return
+            elif start < maxidx and datastr[start+1] not in '\n\r�':
+                yield datastr[start+1]
+            start += 1
 
     def findlinestarts(self, datastr):
         '''Finds characters that begin a line and stores as list.'''
