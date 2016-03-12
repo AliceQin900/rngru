@@ -11,17 +11,66 @@ class ModelParams:
     """Base class for RNN variants.
     NOTE: Not intended to be instantiated!
     """
-    # Parameter and rmsprop cache matrix names
+    # Parameter matrix names and ordering
+    # Defined by model subclass
     pnames = []
-    mnames = []
 
-    def __init__(self, hyper, epoch=0, pos=0):
+    def __init__(self, hyper, epoch=0, pos=0, pvalues=None):
         self.hyper = hyper
         self.epoch = epoch
         self.pos = pos
+
+        if not pvalues:
+            pvalues = self._build_p()
+
+        # Initialize shared variables
+
+        # Create parameter dicts
+        # OrderedDict used to keep paramater access deterministic throughout
+        self.params = OrderedDict()
+        self.mparams = OrderedDict()
+
+        # Load parameter matrices and create rmsprop caches
+        for n in self.pnames:
+            self.params[n] = th.shared(name=n, value=pvalues[n].astype(th.config.floatX))
+            self.mparams['m'+n] = th.shared(name='m'+n, value=np.zeros_like(pvalues[n]).astype(th.config.floatX))
+
+        # Build Theano generation functions
         self._built_g = False
         self._built_t = False
+        self._build_g()
 
+    # Model-specific definitions of parameters and forward propagation step function
+    def _build_p(self):
+        pass
+    def _forward_step(self, x_t, s_t):
+        pass
+
+    # Theano-generated model-dependent functions
+    def gen_chars(self, *args, **kwargs):
+        pass
+    def gen_chars_max(self, *args, **kwargs):
+        pass
+    def train_step_bat(self, *args, **kwargs):
+        pass
+    def errs_bat(self, *args, **kwargs):
+        pass
+    def err_bat(self, *args, **kwargs):
+        pass
+    def grad_bat(self, *args, **kwargs):
+        pass
+    '''
+    def train_step(self, *args, **kwargs):
+        pass
+    def errs(self, *args, **kwargs):
+        pass
+    def err(self, *args, **kwargs):
+        pass
+    def grad(self, *args, **kwargs):
+        pass
+    '''
+
+    # Cross-model definitions of generation functions
     def _build_g(self):
         """Build Theano graph and define generation functions."""
 
@@ -39,9 +88,7 @@ class ModelParams:
         k = T.iscalar('k')
         temperature = T.scalar('temperature')
 
-        rng = T.shared_randomstreams.RandomStreams(seed=int(
-            np.sum(self.a.get_value()) * np.sum(self.b.get_value()) 
-            * np.sum(self.c.get_value()) * 100000.0 + 123456789) % 4294967295)
+        rng = T.shared_randomstreams.RandomStreams(seed=614731559)
 
         # Generate output sequence based on input single onehot and given state.
         # Chooses output char by multinomial, and feeds back in for next step.
@@ -106,6 +153,7 @@ class ModelParams:
         stdout.flush()
         self._built_g = True
 
+    # Cross-model definitions of training functions
     def _build_t(self):
         """Build Theano graph and define training functions."""
 
@@ -120,6 +168,7 @@ class ModelParams:
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
 
+        '''
         ### SINGLE-SEQUENCE TRAINING ###
 
         # Inputs
@@ -146,18 +195,18 @@ class ModelParams:
         cost = T.sum(o_errs)
 
         # Gradients
-        dparams = [ T.grad(cost, p) for p in self.params ]
+        dparams = [ T.grad(cost, p) for p in self.params.values() ]
 
         # rmsprop parameter updates
-        uparams = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams, dparams) ]
+        uparams = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams.values(), dparams) ]
 
         # Gather updates
         train_updates = OrderedDict()
         # Apply rmsprop updates to parameters
-        for p, dp, up in zip(self.params, dparams, uparams):
+        for p, dp, up in zip(self.params.values(), dparams, uparams):
             train_updates[p] = p - learnrate * dp / T.sqrt(up + 1e-6)
         # Update rmsprop caches
-        for mp, up in zip(self.mparams, uparams):
+        for mp, up in zip(self.mparams.values(), uparams):
             train_updates[mp] = up
 
         # Training step function
@@ -166,6 +215,7 @@ class ModelParams:
             outputs=s_out,
             updates=train_updates,
             name = 'train_step')
+        '''
 
         ### BATCH-SEQUENCE TRAINING ###
 
@@ -207,18 +257,18 @@ class ModelParams:
         #cost_bat = T.sum(o_errs_bat)
 
         # Gradients
-        dparams_bat = [ T.grad(cost_bat, p) for p in self.params ]
+        dparams_bat = [ T.grad(cost_bat, p) for p in self.params.values() ]
 
         # rmsprop parameter updates
-        uparams_bat = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams, dparams_bat) ]
+        uparams_bat = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams.values(), dparams_bat) ]
 
         # Gather updates
         train_updates_bat = OrderedDict()
         # Apply rmsprop updates to parameters
-        for p, dp, up in zip(self.params, dparams_bat, uparams_bat):
+        for p, dp, up in zip(self.params.values(), dparams_bat, uparams_bat):
             train_updates_bat[p] = p - learnrate * dp / T.sqrt(up + 1e-6)
         # Update rmsprop caches
-        for mp, up in zip(self.mparams, uparams_bat):
+        for mp, up in zip(self.mparams.values(), uparams_bat):
             train_updates_bat[mp] = up
 
         # Batch training step function
@@ -231,27 +281,30 @@ class ModelParams:
         ### ERROR CHECKING ###
 
         # Error/cost calculations
-        self.errs = th.function(
-            inputs=[x, y, s_in], 
-            outputs=[o_errs, s_out])
         self.errs_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=[o_errs_bat, s_out_bat])
-        self.err = th.function(
-            inputs=[x, y, s_in], 
-            outputs=[cost, s_out])
         self.err_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=[cost_bat, s_out_bat])
 
         # Gradient calculations
         # We'll use this at some point for gradient checking
-        self.grad = th.function(
-            inputs=[x, y, s_in], 
-            outputs=dparams)
         self.grad_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=dparams_bat)
+
+        '''
+        self.errs = th.function(
+            inputs=[x, y, s_in], 
+            outputs=[o_errs, s_out])
+        self.err = th.function(
+            inputs=[x, y, s_in], 
+            outputs=[cost, s_out])
+        self.grad = th.function(
+            inputs=[x, y, s_in], 
+            outputs=dparams)
+        '''
 
         ### Whew, I think we're done! ###
         time2 = time.time()
@@ -285,67 +338,50 @@ class ModelParams:
         p = np.fromstring(pklbytes, dtype=np.uint8)
 
         # Gather parameter matrices and names
-        pvalues = { n:m.get_value() for m, n in zip(self.params, self.pnames) }
+        pvalues = { n:m.get_value() for n, m in self.params.items() }
 
         # Now save params and matrices to file
         try:
-            np.savez(outfile, p=p, **pvalues)
+            np.savez_compressed(outfile, p=p, **pvalues)
         except OSError as e:
             raise e
         else:
             if isinstance(outfile, str):
                 stdout.write("Saved model parameters to {0}\n".format(outfile))
 
-    def freshstate(self, batchsize=0):
+    def freshstate(self, batchsize):
         if batchsize > 0:
             return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
         else:
             return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
 
-    # Old, non-batched version
-    def _calc_loss_old(self, X, Y, init_state=None):
-        step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
-        errors = np.zeros(len(X))
-
-        # Use explicit indexing so a) we can feed the state back in, 
-        # and b) more efficiently store returned errors
-        for pos in range(len(X)):
-            errors[pos], step_state = self.err(X[pos], Y[pos], step_state)
-
-        # Return total loss divided by number of characters in sample
-        return np.sum(errors).item() / float(X.size / X.shape[-1])
-
-    def calc_loss(self, dataset, startpos, batchsize=0, num_examples=0, init_state=None):
+    def calc_loss(self, dataset, startpos, batchsize=16, num_examples=0, init_state=None):
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
 
-        if batchsize == 0:
-            # Get wraparound slices of dataset, since calc_loss doesn't update pos
-            x_slice, y_slice = dataset.slices(startpos, num_examples)
+        if batchsize < 1:
+            raise NotImplementedError("Single-sequence training is no longer available.")
 
-            # Calculate loss old way with blank state
-            return self.model._calc_loss_old(x_slice, y_slice, init_state=step_state)
-        else:
-            data_len = dataset.batchepoch(batchsize)
-            valid_len = num_examples if num_examples else data_len
-            errors = np.zeros(valid_len)
+        data_len = dataset.batchepoch(batchsize)
+        valid_len = num_examples if num_examples else data_len
+        errors = np.zeros(valid_len)
 
-            # Use explicit indexing instead of fancy slicing so we can 
-            # roll over properly
-            data_pos = startpos
-            for valid_pos in range(valid_len):
-                xbatch, ybatch = dataset.batch(data_pos, batchsize)
-                errors[valid_pos], step_state = self.err_bat(xbatch, ybatch, step_state)
-                data_pos += 1
-                # Advance position and overflow
-                if data_pos >= data_len:
-                    data_pos = 0
-                    # Roll state vector on batch axis, to keep continuity
-                    step_state = np.roll(step_state, 1, axis=1)
+        # Use explicit indexing instead of fancy slicing so we can 
+        # roll over properly
+        data_pos = startpos
+        for valid_pos in range(valid_len):
+            xbatch, ybatch = dataset.batch(data_pos, batchsize)
+            errors[valid_pos], step_state = self.err_bat(xbatch, ybatch, step_state)
+            data_pos += 1
+            # Advance position and overflow
+            if data_pos >= data_len:
+                data_pos = 0
+                # Roll state vector on batch axis, to keep continuity
+                step_state = np.roll(step_state, 1, axis=1)
 
-            # Return total loss divided by number of characters in sample
-            return np.sum(errors).item() / float(valid_len * batchsize * dataset.seq_len)
+        # Return total loss divided by number of characters in sample
+        return np.sum(errors).item() / float(valid_len * batchsize * dataset.seq_len)
 
-    def train(self, dataset, batchsize=0, num_examples=0, callback_every=1000, callback=None, init_state=None):
+    def train(self, dataset, batchsize=16, num_examples=0, callback_every=1000, callback=None, init_state=None):
         """Train model on given dataset for num_examples, with optional 
         batch size.
 
@@ -358,11 +394,15 @@ class ModelParams:
         If num_examples is 0, will train for full epoch.
         """
 
+        # Batched training only
+        if batchsize < 1:
+            raise NotImplementedError("Single-sequence training is no longer available.")
+
         # First build training functions if not already done
         if not self._built_t:
             self._build_t()
 
-        input_len = dataset.batchepoch(batchsize) if batchsize > 0 else dataset.data_len
+        input_len = dataset.batchepoch(batchsize)
         train_len = num_examples if num_examples else input_len
 
         # Start with fresh state if none provided
@@ -375,83 +415,53 @@ class ModelParams:
         # keep track, both for model status and checkpoint purposes
         for train_pos in range(train_len):
             # Learning step
-            if batchsize > 0:
-                xbatch, ybatch = dataset.batch(self.pos, batchsize)
-                step_state = self.train_step_bat(xbatch, ybatch, step_state, 
-                    self.hyper.learnrate, self.hyper.decay)
-            else:
-                step_state = self.train_step(dataset.x_onehots[self.pos], dataset.y_onehots[self.pos], 
-                    step_state, self.hyper.learnrate, self.hyper.decay)
+            xbatch, ybatch = dataset.batch(self.pos, batchsize)
+            step_state = self.train_step_bat(xbatch, ybatch, step_state, 
+                self.hyper.learnrate, self.hyper.decay)
 
             # Advance position and overflow
             self.pos += 1
             if self.pos >= input_len:
                 self.epoch += 1
                 self.pos = 0
-                if batchsize > 0:
-                    # Roll state vector on batch axis, to keep continuity
-                    step_state = np.roll(step_state, 1, axis=1)
-                else:
-                    step_state = self.freshstate(batchsize)
+                # Roll state vector on batch axis, to keep continuity
+                step_state = np.roll(step_state, 1, axis=1)
 
             # Optional callback
             if callback and callback_every and (train_pos + 1) % callback_every == 0:
                 # Make sure to only pass a slice of state if batched
-                if batchsize > 0:
-                    callback(self, step_state[:,0,:])
-                else:
-                    callback(self, step_state)
+                callback(self, step_state[:,0,:])
 
         # Return final state
         return step_state
 
-    def traintime(self, inputmat, outputmat, init_state=None):
-        """Prints time for single training step.
-        Input must be matrix of one-hot vectors.
-        """
-        # Fresh state
-        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
-
-        # Time training step
-        time1 = time.time()
-        self.train_step(inputmat, outputmat, start_state, self.hyper.learnrate, self.hyper.decay)
-        time2 = time.time()
-
-        stdout.write("Time for SGD/RMS learning step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputmat), (time2 - time1) * 1000.0))
-
-        # Time loss calc
-        time1 = time.time()
-        self.err(inputmat, outputmat, start_state)
-        time2 = time.time()
-
-        stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
-            len(inputmat), (time2 - time1) * 1000.0))
-
-    def batchtime(self, intensor, outtensor, init_state=None):
+    def traintime(self, dataset, batchsize=16, pos=0, init_state=None):
         """Prints time for batch training step (default size 16).
         Input must be 3D tensor of matrices of one-hot vectors.
         """
         # Fresh state
-        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(intensor.shape[1])
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
+
+        # Get slice
+        xbatch, ybatch = dataset.batch(pos, batchsize)
 
         # Time training step
         time1 = time.time()
-        self.train_step_bat(intensor, outtensor, start_state, self.hyper.learnrate, self.hyper.decay)
+        self.train_step_bat(xbatch, ybatch, start_state, self.hyper.learnrate, self.hyper.decay)
         time2 = time.time()
 
         stdout.write(
             "Time for SGD/RMS learning batch of {0:d} sequences, {1:d} chars each: {2:.4f} ms\n".format(
-            intensor.shape[1], intensor.shape[0], (time2 - time1) * 1000.0))
+            xbatch.shape[1], xbatch.shape[0], (time2 - time1) * 1000.0))
 
         # Time loss calc
         # NOTE: uses only matrix from first part of batch (batched error not yet implemented)
         time1 = time.time()
-        self.err_bat(intensor, outtensor, start_state)
+        self.err_bat(xbatch, ybatch, start_state)
         time2 = time.time()
 
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
-            intensor.shape[0], (time2 - time1) * 1000.0))
+            xbatch.shape[0], (time2 - time1) * 1000.0))
 
     def genchars(self, charset, numchars, init_state=None, seedch=None, use_max=False, temperature=1.0):
         """Generate string of characters from current model parameters.
@@ -463,13 +473,16 @@ class ModelParams:
         """
 
         # Fresh state
-        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate()
+        start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(0)
 
         # Seed given or random character to start (as one-hot)
         if seedch:
             seedidx = charset.idxofchar(seedch)
         else:
-            seedidx = charset.semirandomidx()
+            try:
+                seedidx = charset.semirandomidx()
+            except AttributeError:
+                seedidx = charset.randomidx()
 
         seedvec = charset.onehot(seedidx)
 
@@ -485,25 +498,4 @@ class ModelParams:
         # Now construct string
         return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
 
-    # Theano-generated model-dependent functions
-    def train_step(self, *args, **kwargs):
-        pass
-    def train_step_bat(self, *args, **kwargs):
-        pass
-    def errs(self, *args, **kwargs):
-        pass
-    def errs_bat(self, *args, **kwargs):
-        pass
-    def err(self, *args, **kwargs):
-        pass
-    def err_bat(self, *args, **kwargs):
-        pass
-    def grad(self, *args, **kwargs):
-        pass
-    def grad_bat(self, *args, **kwargs):
-        pass
-    def gen_chars(self, *args, **kwargs):
-        pass
-    def gen_chars_max(self, *args, **kwargs):
-        pass
 
