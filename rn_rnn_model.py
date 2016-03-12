@@ -167,55 +167,7 @@ class ModelParams:
         # Scalar training parameters
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
-
-        '''
-        ### SINGLE-SEQUENCE TRAINING ###
-
-        # Inputs
-        x = T.matrix('x')
-        y = T.matrix('y')
-        s_in = T.matrix('s_in')
-
-        def single_step(x_t, s_t):
-            o_t1, s_t = forward_step(x_t, s_t)
-            # Theano's softmax returns matrix, and we just want the one entry
-            o_t2 = T.nnet.softmax(o_t1)[-1]
-            return o_t2, s_t
-
-        # Now get Theano to do the heavy lifting
-        # Costs
-        [o, s_seq], _ = th.scan(
-            single_step, 
-            sequences=x, 
-            truncate_gradient=self.hyper.bptt_truncate,
-            outputs_info=[None, dict(initial=s_in)])
-        s_out = s_seq[-1]
-        o_errs = T.nnet.categorical_crossentropy(o, y)
-        # Should regularize at some point
-        cost = T.sum(o_errs)
-
-        # Gradients
-        dparams = [ T.grad(cost, p) for p in self.params.values() ]
-
-        # rmsprop parameter updates
-        uparams = [ decayrate * mp + (1 - decayrate) * dp ** 2 for mp, dp in zip(self.mparams.values(), dparams) ]
-
-        # Gather updates
-        train_updates = OrderedDict()
-        # Apply rmsprop updates to parameters
-        for p, dp, up in zip(self.params.values(), dparams, uparams):
-            train_updates[p] = p - learnrate * dp / T.sqrt(up + 1e-6)
-        # Update rmsprop caches
-        for mp, up in zip(self.mparams.values(), uparams):
-            train_updates[mp] = up
-
-        # Training step function
-        self.train_step = th.function(
-            inputs=[x, y, s_in, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
-            outputs=s_out,
-            updates=train_updates,
-            name = 'train_step')
-        '''
+        reg_lambda = T.scalar('reg_lambda')
 
         ### BATCH-SEQUENCE TRAINING ###
 
@@ -226,35 +178,37 @@ class ModelParams:
 
         # Costs
 
-        # NEW VERSION
-        # Since Theano's categorical cross-entropy function only works on matrices,
-        # the cross-entropy loss has been moved inside the scan, so we can keep the
-        # sequencing intact. (Slower, but seems to catch longer-term dependencies better?)
         def batch_step(x_t, y_t, s_t):
             o_t1, s_t = forward_step(x_t, s_t)
             # We can use the whole matrix from softmax for batches
             o_t2 = T.nnet.softmax(o_t1)
-            # Get cross-entropy loss of batch step
-            e_t = T.sum(T.nnet.categorical_crossentropy(o_t2, y_t))
-            return e_t, s_t
+            return o_t2, s_t
 
-        [o_errs_bat, s_seq_bat], _ = th.scan(
+        [o_bat, s_seq_bat], _ = th.scan(
             batch_step, 
             sequences=[x_bat, y_bat], 
             truncate_gradient=self.hyper.bptt_truncate,
             outputs_info=[None, dict(initial=s_in_bat)])
         s_out_bat = s_seq_bat[-1]
-        cost_bat = T.sum(o_errs_bat)
 
-        # OLD VERSION
         # We have to reshape the outputs, since Theano's categorical cross-entropy
         # function will only work with matrices or vectors, not tensor3s.
         # Thus we flatten along the sequence/batch axes, leaving the prediction
-        # vectors as-is, and this seems to be enough for Theano's deep magic to work.
-        #o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
-        #y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
-        #o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
-        #cost_bat = T.sum(o_errs_bat)
+        # vectors as-is, compute cross-entropy, then reshape the errors back to 
+        # their proper dimensions.
+        o_bat_flat = T.reshape(o_bat, (o_bat.shape[0] * o_bat.shape[1], -1))
+        y_bat_flat = T.reshape(y_bat, (y_bat.shape[0] * y_bat.shape[1], -1))
+        o_errs_bat = T.nnet.categorical_crossentropy(o_bat_flat, y_bat_flat)
+        o_errs_res = T.reshape(o_errs_bat, (o_bat.shape[0], o_bat.shape[1]))
+
+        # Next, we reshuffle to group sequences together instead
+        # of batches, then sum the individual sequence errors
+        # (Hopefully Theano's auto-differentials follow this)
+        o_errs_shuf = o_errs_res.dimshuffle(1, 0)
+        o_errs_sums = T.sum(o_errs_shuf, axis=1)
+        # TODO: add regularization term here, so each part of batch gets it
+        # (How to define generally, though -- maybe make that per-model somehow?)
+        cost_bat = T.sum(o_errs_sums)
 
         # Gradients
         dparams_bat = [ T.grad(cost_bat, p) for p in self.params.values() ]
@@ -273,10 +227,13 @@ class ModelParams:
 
         # Batch training step function
         self.train_step_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat, th.Param(learnrate, default=0.001), th.Param(decayrate, default=0.95)],
+            inputs=[x_bat, y_bat, s_in_bat, 
+                th.Param(learnrate, default=0.001), 
+                th.Param(decayrate, default=0.95)],
             outputs=s_out_bat,
             updates=train_updates_bat,
             name='train_step_bat')
+        #        th.Param(reg_lambda, default=0.1)],
 
         ### ERROR CHECKING ###
 
@@ -355,7 +312,7 @@ class ModelParams:
         else:
             return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
 
-    def calc_loss(self, dataset, startpos, batchsize=16, num_examples=0, init_state=None):
+    def calc_loss(self, dataset, startpos=0, batchsize=16, num_examples=0, init_state=None):
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
 
         if batchsize < 1:
