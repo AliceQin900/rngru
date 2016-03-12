@@ -790,7 +790,8 @@ class ModelState:
 
         # Start with a blank state if specified, none stored, or wrong shape for batch size
         fresh_state = self.model.freshstate(batchsize)
-        if clear_state or not hasattr(self, 'laststate') or self.laststate.shape != fresh_state.shape:
+        if clear_state or not hasattr(self, 'laststate') or not hasattr(
+            self.laststate, 'shape') or self.laststate.shape != fresh_state.shape:
             train_state = fresh_state
         else:
             train_state = self.laststate
