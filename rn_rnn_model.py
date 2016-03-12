@@ -157,7 +157,7 @@ class ModelParams:
         # Scalar training parameters
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
-        reg_lambda = T.scalar('reg_lambda')
+        #reg_lambda = T.scalar('reg_lambda')
 
         ### BATCH-SEQUENCE TRAINING ###
 
@@ -195,9 +195,10 @@ class ModelParams:
         # of batches, then sum the individual sequence errors
         # (Hopefully Theano's auto-differentials follow this)
         o_errs_shuf = o_errs_res.dimshuffle(1, 0)
-        o_errs_sums = T.sum(o_errs_shuf, axis=1)
         # TODO: add regularization term here, so each part of batch gets it
         # (How to define generally, though -- maybe make that per-model somehow?)
+        o_errs_sums = T.sum(o_errs_shuf, axis=1)
+        # Final cost (after regularization (if I ever put it in))
         cost_bat = T.sum(o_errs_sums)
 
         # Gradients
@@ -389,8 +390,7 @@ class ModelParams:
             "Time for SGD/RMS learning batch of {0:d} sequences, {1:d} chars each: {2:.4f} ms\n".format(
             xbatch.shape[1], xbatch.shape[0], (time2 - time1) * 1000.0))
 
-        # Time loss calc
-        # NOTE: uses only matrix from first part of batch (batched error not yet implemented)
+        # Time loss calc step
         time1 = time.time()
         self.err_bat(xbatch, ybatch, start_state)
         time2 = time.time()
