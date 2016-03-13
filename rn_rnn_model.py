@@ -78,6 +78,7 @@ class ModelParams:
         ### SEQUENCE GENERATION ###
 
         x_in = T.vector('x_in')
+        x_seq = T.matrix('x_seq')
         s_in = T.matrix('s_in')
         k = T.iscalar('k')
         temperature = T.scalar('temperature')
@@ -85,21 +86,23 @@ class ModelParams:
         rng = T.shared_randomstreams.RandomStreams(seed=614731559)
 
         # Generate output sequence based on input single onehot and given state.
+
+        # Main version:
         # Chooses output char by multinomial, and feeds back in for next step.
         # Scaled by temperature parameter before softmax (temperature 1.0 leaves
         # softmax output unchanged).
-        # Returns matrix of one-hot vectors
+        # Returns matrix of one-hot vectors.
         def generate_step(x_t, s_t, temp):
             # Do next step
-            o_t1, s_t = forward_step(x_t, s_t)
+            o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Get softmax
-            o_t2 = T.nnet.softmax(o_t1 / temp)[-1]
+            o_ts = T.nnet.softmax(o_t1 / temp)[-1]
 
             # Randomly choose by multinomial distribution
-            o_rand = rng.multinomial(n=1, pvals=o_t2, dtype=th.config.floatX)
+            o_rand = rng.multinomial(n=1, pvals=o_ts, dtype=th.config.floatX)
 
-            return o_rand, s_t
+            return o_rand, s_t1
 
         [o_chs, s_chs], genupdate = th.scan(
             fn=generate_step,
@@ -109,24 +112,25 @@ class ModelParams:
         s_ch = s_chs[-1]
 
         self.gen_chars = th.function(
-            inputs=[k, x_in, s_in, th.Param(temperature, default=0.1)], 
+            inputs=[k, x_in, s_in, th.Param(temperature, default=0.5)], 
             outputs=[o_chs, s_ch], 
             name='gen_chars', 
             updates=genupdate)
 
-        # Chooses output char by argmax, and feeds back in
+        # Alternate version:
+        # As above, but chooses output char by argmax, and feeds back in.
         def generate_step_max(x_t, s_t):
             # Do next step
             o_t1, s_t1 = forward_step(x_t, s_t)
 
             # Get softmax
-            o_t2 = T.nnet.softmax(o_t1)[-1]
+            o_ts = T.nnet.softmax(o_t1)[-1]
 
             # Now find selected index
-            o_idx = T.argmax(o_t2)
+            o_idx = T.argmax(o_ts)
 
             # Create one-hot
-            o_ret = T.zeros_like(o_t2)
+            o_ret = T.zeros_like(o_ts)
             o_ret = T.set_subtensor(o_ret[o_idx], 1.0)
 
             return o_ret, s_t1
@@ -142,6 +146,32 @@ class ModelParams:
             outputs=[o_chms, s_chm], 
             name='gen_chars_max')
 
+        # Sequence processing without generation:
+        # Input is onehot-encoded string, output is sequence
+        # of predictions and states at each step. Useful for
+        # direct comparisons of output probabilities and 
+        # per-neuron activations
+        def process_step(x_t, s_t, temp):
+            # Do next step
+            o_t1, s_t1 = forward_step(x_t, s_t)
+
+            # Get softmax
+            o_ts = T.nnet.softmax(o_t1 / temp)[-1]
+
+            return o_ts, s_t1
+
+        [o_seq, s_seq], _ = th.scan(
+            fn=process_step,
+            outputs_info=[None, dict(initial=s_in)],
+            sequences=x_seq,
+            non_sequences=temperature)
+
+        self.seq_process = th.function(
+            inputs=[x_seq, s_in, th.Param(temperature, default=0.5)],
+            outputs=[o_seq, s_seq],
+            name='seq_process')
+
+        # And done!
         time2 = time.time()
         stdout.write("done!\nCompilation took {0:.3f} s.\n\n".format(time2 - time1))
         stdout.flush()
@@ -166,18 +196,17 @@ class ModelParams:
 
         ### BATCH-SEQUENCE TRAINING ###
 
-        # Batch Inputs
+        # Batch inputs
         x_bat = T.tensor3('x_bat')
         y_bat = T.tensor3('y_bat')
         s_in_bat = T.tensor3('s_in_bat')
 
-        # Costs
-
+        # Step function
         def batch_step(x_t, y_t, s_t):
             o_t1, s_t = forward_step(x_t, s_t)
             # We can use the whole matrix from softmax for batches
-            o_t2 = T.nnet.softmax(o_t1)
-            return o_t2, s_t
+            o_ts = T.nnet.softmax(o_t1)
+            return o_ts, s_t
 
         [o_bat, s_seq_bat], _ = th.scan(
             batch_step, 
@@ -201,9 +230,11 @@ class ModelParams:
         # (Hopefully Theano's auto-differentials follow this)
         o_errs_shuf = o_errs_res.dimshuffle(1, 0)
         o_errs_sums = T.sum(o_errs_shuf, axis=1)
+        # Regularization term (without averaging over samples (done outside Theano))
+        # reg_cost() defined per-model
+        reg_sum = reg_cost(reg_lambda)
         # Final cost (with regularization)
-        # (reg_cost() defined per-model)
-        cost_bat = T.sum(o_errs_sums) + reg_cost(reg_lambda)
+        cost_bat = T.sum(o_errs_sums) + reg_sum
 
         # Gradients
         dparams_bat = [ T.grad(cost_bat, p) for p in self.params.values() ]
@@ -232,10 +263,12 @@ class ModelParams:
 
         ### ERROR CHECKING ###
 
-        # Error/cost calculations
+        # Mostly for internal debug, returns unsummed error tensor and regularization cost
         self.errs_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat], 
-            outputs=[o_errs_res, s_out_bat])
+            outputs=[o_errs_res, reg_sum, s_out_bat])
+
+        # Full error sum, not averaged over sample size (done in outer non-Theano func)
         self.err_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.0)], 
             outputs=[cost_bat, s_out_bat])

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Python module dependencies
+# Module dependencies
 import os, datetime, pickle, random, time
 from sys import stdin, stdout, stderr
 import numpy as np
@@ -37,7 +37,6 @@ class HyperParams:
 
 
 # TODO (maybe): change to let CharSet get frequencies from strings
-# TODO: save/load charset in its own file
 class CharSet:
     """Character set with bidirectional mappings."""
 
@@ -211,7 +210,7 @@ class DataSet:
             self.data_len = len(self.x_array)
 
         if 'charsize' not in state:
-            # No vocab size stored, infer
+            # No vocab size stored (must be old), infer
             stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
             vocab = np.amax(self.y_array) + 1
             self.charsize = vocab
@@ -314,7 +313,8 @@ class DataSet:
         # Get slices and rearrange
         # Have to transpose so that 2nd/3rd dimensions are matrices corresponding
         # to batchsize rows and onehot columns, and the 1st dim (slice indicies) are
-        # the sequences the batch training function will take
+        # the sequences the batch training function will take, since Theano's scan
+        # iterates over the first dimension of a given tensor
         if self.x_onehots is not None and self.y_onehots is not None:
             # Onehots already built, take from them
             xbatch = self.x_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
@@ -327,15 +327,6 @@ class DataSet:
             ybatch = np.eye(self.charsize, dtype=th.config.floatX)[yidxs]
 
         return xbatch, ybatch
-
-    def slices(self, startpos, slicelen):
-        """Returns wraparound slices of x_onehots and y_onehots."""
-        # Get wraparound slices of dataset, since calc_loss doesn't update pos
-        idxs = range(startpos, startpos + slicelen)
-        x_slice = self.x_onehots.take(idxs, axis=0, mode='wrap')
-        y_slice = self.y_onehots.take(idxs, axis=0, mode='wrap')
-
-        return x_slice, y_slice
 
 
 class Checkpoint:
@@ -472,8 +463,10 @@ class ModelState:
         return state
 
     def __setstate__(self, state):
+        # For upgrading of older versions
         if 'modelfile' in state:
             del state['modelfile']
+
         self.__dict__.update(state)
 
     @classmethod
@@ -948,7 +941,6 @@ def printprogress(charset):
         print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
         genstr, _ = model.genchars(charset, 100, init_state=init_state, temperature=0.5)
-        #genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
     return retfunc
 

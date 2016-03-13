@@ -9,7 +9,7 @@ from rn_rnn_model import ModelParams
 class GRUEncode(ModelParams):
     """Multi-layer GRU network, with non-recurrent input layer E and 
     output layer V, with bias vectors of a and c, and specified number 
-    of hidden layers.
+    of gated recurrent hidden layers.
 
     Each hidden layer has weight matrices U and W with bias vector b.
 
