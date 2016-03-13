@@ -458,6 +458,12 @@ class ModelState:
                 # Checkpoint is invalid, so don't use its file
                 self.cpfile = None
 
+    def _fix_old_filenames(self):
+        """Rewrite stored filenames from old versions (including paths) to
+        new versions (relative to self.curdir).
+        """
+        pass
+
     @classmethod
     def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUEncode', *, seq_len=100, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
@@ -517,9 +523,38 @@ class ModelState:
 
         return modelstate
 
+    @classmethod
+    def load(cls, fromdir):
+        """Attempts to load model state from file in directory fromdir.
+        Will look for files ending in 'state.p'. If multiple files found,
+        will print list but not attempt to load.
+        """
+        if not fromdir:
+            raise FileNotFoundError('No directory specified!')
+
+        # Get list of files from directory
+        try:
+            filenames = [fn for fn in os.listdir(fromdir) if fn.endswith('state.p')]
+        except OSError as e:
+            stderr.write("Couldn't list directory, error: {0}\n".format(e))
+            return None
+        else:
+            # No files found
+            if len(filenames) == 0:
+                stderr.write("No model state file found in {0}\n".format(fromdir))
+                return None
+            # More than one file found
+            elif len(filenames) > 1:
+                stderr.write("Multiple model state files found:\n")
+                for fn in sorted(filenames, key=str.lower):
+                    stderr.write("{0}\n".format(os.path.join(fromdir, fn)))
+                return None
+            # Just right
+            else:
+                return cls.loadfromfile(os.path.join(fromdir, filenames[0]), usedir=fromdir)
 
     @staticmethod
-    def loadfromfile(filename):
+    def loadfromfile(filename, usedir=None):
         """Loads model state from filename.
         Note: dataset and model params can be restored from last checkpoint
         after loading model state using restore().
@@ -536,6 +571,9 @@ class ModelState:
                 stderr.write("Couldn't load model state, error: {0}\n".format(e))
                 return None
             else:
+                # Set working directory if specified
+                if usedir:
+                    modelstate.curdir = usedir
                 stderr.write("Loaded model state from {0}\n".format(filename))
                 #modelstate.restore()
                 return modelstate
@@ -835,19 +873,14 @@ class ModelState:
             # Adjust learning rate if necessary
             if loss > self.cp.loss:
                 # Loss increasing, lower learning rate
-                self.model.hyper.learnrate *= 0.8
+                self.model.hyper.learnrate *= 0.5
                 stdout.write("Loss increased between validations, adjusted learning rate to {0:.6f}\n".format(
                     self.model.hyper.learnrate))
-            '''
-            elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.97:
-                # Loss not decreasing fast enough, raise decay rate
-                self.model.hyper.decay = (1.0 + self.model.hyper.decay) / 2.0
-                # Just in case (shouldn't happen, but you know floating points...)
-                if self.model.hyper.decay >= 1.0:
-                    self.model.hyper.decay = 1.0 - 1e-6
-                stdout.write("Loss changed too little between validations, adjusted decay rate to {0:.6f}\n".format(
-                    self.model.hyper.decay))
-            '''
+            elif loss / self.cp.loss < 1.0 and loss / self.cp.loss > 0.98:
+                # Loss not decreasing fast enough, lower learning rate a bit
+                self.model.hyper.learnrate *= 0.5
+                stdout.write("Loss changed too little between validations, adjusted learning rate to {0:.6f}\n".format(
+                    self.model.hyper.learnrate))
 
             stdout.write("\n--------\n\n")
 
