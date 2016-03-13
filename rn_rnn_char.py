@@ -370,7 +370,7 @@ class Checkpoint:
                 return cp, cpfilename
 
     @classmethod
-    def loadcheckpoint(cls, cpfile, fromdir=''):
+    def loadcheckpoint(cls, cpfile, fromdir='', fix_old=False):
         """Loads checkpoint from saved file and returns checkpoint object."""
         cppath = os.path.join(fromdir, cpfile)
         try:
@@ -382,8 +382,8 @@ class Checkpoint:
             try:
                 stderr.write("Restoring checkpoint from file {0}...\n".format(cppath))
                 cp = pickle.load(f)
-                #if fromdir:
-                #    _fix_old_filenames(cp, fromdir)
+                if fromdir and fix_old:
+                    _fix_old_filenames(cp, fromdir)
             except Exception as e:
                 stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cppath, e))
                 return None
@@ -543,7 +543,7 @@ class ModelState:
                 return cls.loadfromfile(filenames[0], fromdir=fromdir)
 
     @staticmethod
-    def loadfromfile(filename, fromdir=''):
+    def loadfromfile(filename, fromdir='', fix_old=False):
         """Loads model state from filename.
         Note: dataset and model params can be restored from last checkpoint
         after loading model state using restore().
@@ -569,13 +569,13 @@ class ModelState:
                 stderr.write("Using working directory {0}/\n".format(modelstate.curdir))
 
                 # Fix filenames if necessary
-                #if fromdir:
-                #    _fix_old_filenames(modelstate, fromdir)
+                if fromdir:
+                    _fix_old_filenames(modelstate, fromdir)
 
                 # Reload checkpoint, if present
                 if modelstate.cpfile:
                     cppath = os.path.join(modelstate.curdir, modelstate.cpfile)
-                    modelstate.cp = Checkpoint.loadcheckpoint(modelstate.cpfile, modelstate.curdir)
+                    modelstate.cp = Checkpoint.loadcheckpoint(modelstate.cpfile, modelstate.curdir, fix_old)
                     if modelstate.cp:
                         stderr.write("Loaded checkpoint from {0}\n".format(cppath))
                     else:
