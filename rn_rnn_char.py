@@ -215,29 +215,29 @@ class DataSet:
     def savetofile(self, savedir):
         """Saves data set to file in savedir.
         Filename taken from srcinfo if possible, otherwise defaults to 'dataset.p'.
-        Returns filename if successful, None otherwise.
+        Returns filename relative to savedir if successful, None otherwise.
         """
         # Create directory if necessary (won't throw exception if dir already exists)
-        os.makedirs(savedir, exist_ok=True)
+        #os.makedirs(savedir, exist_ok=True)
 
         if isinstance(self.srcinfo, str):
-            filename = os.path.join(savedir, self.srcinfo + ".p")
+            filename = self.srcinfo + ".p"
         elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
-            filename = os.path.join(savedir, self.srcinfo['name'] + ".p")
+            filename = self.srcinfo['name'] + ".p"
         else:
-            filename = os.path.join(savedir, "dataset.p")
+            filename = "dataset.p"
 
+        pathname = os.path.join(savedir, filename)
         try:
-            f = open(filename, 'wb')
+            f = open(pathname, 'wb')
         except OSError as e:
-            stderr.write("Couldn't open target file, error: {0}\n".format(e))
+            stderr.write("Couldn't open target file {0}, error: {1}\n".format(pathname, e))
             return None
         else:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-            stderr.write("Saved data set to {0}\n\n".format(filename))
-            return filename
-        finally:
             f.close()
+            stderr.write("Saved data set to {0}\n\n".format(pathname))
+            return filename
 
     def build_onehots(self, vocab_size=None):
         """Build one-hot encodings of each sequence."""
@@ -333,56 +333,59 @@ class Checkpoint:
         """
 
         # Create directory if necessary (won't throw exception if dir already exists)
-        os.makedirs(savedir, exist_ok=True)
+        #os.makedirs(savedir, exist_ok=True)
 
         # Determine filenames
         modeldatetime = datetime.datetime.now(datetime.timezone.utc)
         basefilename = modeldatetime.strftime("%Y-%m-%d-%H:%M:%S-UTC-{0:.3f}-model".format(loss))
 
         # Save model file
-        modelfilename = os.path.join(savedir, basefilename + ".npz")
+        modelfilename = basefilename + ".npz"
+        modelpath = os.path.join(savedir, modelfilename)
         try:
-            modelfile = open(modelfilename, 'wb')
+            modelfile = open(modelpath, 'wb')
         except OSError as e:
-            stderr.write("Couldn't save model parameters to {0}!\nError: {1}\n".format(modelfilename, e))
+            stderr.write("Couldn't save model parameters to {0}!\nError: {1}\n".format(modelpath, e))
             return None, None
         else:
             modelparams.savetofile(modelfile)
-            stderr.write("Saved model parameters to {0}\n".format(modelfilename))
+            modelfile.close()
+            stderr.write("Saved model parameters to {0}\n".format(modelpath))
 
             # Create checkpoint
             cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss)
-            cpfilename = os.path.join(savedir, basefilename + ".p".format(loss))
+            cpfilename = basefilename + ".p".format(loss)
+            cppath = os.path.join(savedir, cpfilename)
 
             # Save checkpoint
             try:
-                cpfile = open(cpfilename, 'wb')
+                cpfile = open(cppath, 'wb')
             except OSError as e:
-                stderr.write("Couldn't save checkpoint to {0}!\nError: {1}\n".format(cpfilename, e))
+                stderr.write("Couldn't save checkpoint to {0}!\nError: {1}\n".format(cppath, e))
                 return None, None
             else:
                 pickle.dump(cp, cpfile, protocol=pickle.HIGHEST_PROTOCOL)
-                stderr.write("Saved checkpoint to {0}\n".format(cpfilename))
-                return cp, cpfilename
-            finally:
                 cpfile.close()
-        finally:
-            modelfile.close()
+                stderr.write("Saved checkpoint to {0}\n".format(cppath))
+                return cp, cpfilename
 
     @classmethod
-    def loadcheckpoint(cls, cpfile):
+    def loadcheckpoint(cls, cpfile, fromdir=''):
         """Loads checkpoint from saved file and returns checkpoint object."""
+        cppath = os.path.join(fromdir, cpfile)
         try:
-            f = open(cpfile, 'rb')
+            f = open(cppath, 'rb')
         except OSError as e:
-            stderr.write("Couldn't open checkpoint file {0}!\nError: {1}\n".format(cpfile, e))
+            stderr.write("Couldn't open checkpoint file {0}!\nError: {1}\n".format(cppath, e))
             return None
         else:
             try:
-                stderr.write("Restoring checkpoint from file {0}...\n".format(cpfile))
+                stderr.write("Restoring checkpoint from file {0}...\n".format(cppath))
                 cp = pickle.load(f)
+                #if fromdir:
+                #    _fix_old_filenames(cp, fromdir)
             except Exception as e:
-                stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cpfile, e))
+                stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cppath, e))
                 return None
             else:
                 return cp
@@ -423,8 +426,8 @@ class ModelState:
         'GRUEncode': GRUEncode
     }
 
-    def __init__(self, chars, curdir, modeltype='GRUResize', srcinfo=None, cpfile=None, 
-        cp=None, datafile=None, data=None, modelfile=None, model=None):
+    def __init__(self, chars, curdir, modeltype='GRUEncode', srcinfo=None, cpfile=None, 
+        cp=None, datafile=None, data=None, model=None):
         self.chars = chars
         self.curdir = curdir
         self.modeltype = modeltype
@@ -433,7 +436,6 @@ class ModelState:
         self.cp = cp
         self.datafile = datafile
         self.data = data
-        self.modelfile = modelfile
         self.model = model
         self.laststate = None
 
@@ -447,22 +449,9 @@ class ModelState:
         return state
 
     def __setstate__(self, state):
+        if 'modelfile' in state:
+            del state['modelfile']
         self.__dict__.update(state)
-        # Reload checkpoint, if present
-        if self.cpfile:
-            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
-            if self.cp:
-                stderr.write("Loaded checkpoint from {0}\n".format(self.cpfile))
-            else:
-                stderr.write("Couldn't load checkpoint from {0}\n".format(self.cpfile))
-                # Checkpoint is invalid, so don't use its file
-                self.cpfile = None
-
-    def _fix_old_filenames(self):
-        """Rewrite stored filenames from old versions (including paths) to
-        new versions (relative to self.curdir).
-        """
-        pass
 
     @classmethod
     def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUEncode', *, seq_len=100, init_checkpoint=True, **kwargs):
@@ -527,7 +516,7 @@ class ModelState:
     def load(cls, fromdir):
         """Attempts to load model state from file in directory fromdir.
         Will look for files ending in 'state.p'. If multiple files found,
-        will print list but not attempt to load.
+        will print list, but not attempt to load.
         """
         if not fromdir:
             raise FileNotFoundError('No directory specified!')
@@ -551,17 +540,18 @@ class ModelState:
                 return None
             # Just right
             else:
-                return cls.loadfromfile(os.path.join(fromdir, filenames[0]), usedir=fromdir)
+                return cls.loadfromfile(filenames[0], fromdir=fromdir)
 
     @staticmethod
-    def loadfromfile(filename, usedir=None):
+    def loadfromfile(filename, fromdir=''):
         """Loads model state from filename.
         Note: dataset and model params can be restored from last checkpoint
         after loading model state using restore().
         """
 
+        pathname = os.path.join(fromdir, filename)
         try:
-            f = open(filename, 'rb')
+            f = open(pathname, 'rb')
         except OSError as e:
             stderr.write("Couldn't open model state file, error: {0}\n".format(e))
         else:
@@ -572,10 +562,28 @@ class ModelState:
                 return None
             else:
                 # Set working directory if specified
-                if usedir:
-                    modelstate.curdir = usedir
-                stderr.write("Loaded model state from {0}\n".format(filename))
-                #modelstate.restore()
+                if fromdir:
+                    modelstate.curdir = fromdir
+                else:
+                    modelstate.curdir = os.path.dirname(pathname)
+                stderr.write("Using working directory {0}/\n".format(modelstate.curdir))
+
+                # Fix filenames if necessary
+                #if fromdir:
+                #    _fix_old_filenames(modelstate, fromdir)
+
+                # Reload checkpoint, if present
+                if modelstate.cpfile:
+                    cppath = os.path.join(modelstate.curdir, modelstate.cpfile)
+                    modelstate.cp = Checkpoint.loadcheckpoint(modelstate.cpfile, modelstate.curdir)
+                    if modelstate.cp:
+                        stderr.write("Loaded checkpoint from {0}\n".format(cppath))
+                    else:
+                        stderr.write("Couldn't load checkpoint from {0}\n".format(cppath))
+                        # Checkpoint is invalid, so don't use its file
+                        modelstate.cpfile = None
+                stderr.write("Loaded model state from {0}\n".format(pathname))
+
                 return modelstate
             finally:
                 f.close()
@@ -601,28 +609,30 @@ class ModelState:
             raise e
         else:
             if isinstance(self.srcinfo, str):
-                filename = os.path.join(usedir, self.srcinfo + ".p")
+                filename = self.srcinfo + ".p"
             elif isinstance(self.srcinfo, dict) and 'name' in self.srcinfo:
-                filename = os.path.join(usedir, self.srcinfo['name'] + ".p")
+                filename = self.srcinfo['name'] + ".p"
             else:
-                filename = os.path.join(usedir, "modelstate.p")
+                filename = "modelstate.p"
 
             try:
-                f = open(filename, 'wb')
+                pathname = os.path.join(usedir, filename)
+                f = open(pathname, 'wb')
             except OSError as e:
                 stderr.write("Couldn't open target file, error: {0}\n".format(e))
                 return None
             else:
                 pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
-                stderr.write("Saved model state to {0}\n".format(filename))
+                stderr.write("Saved model state to {0}\n".format(pathname))
                 return filename
             finally:
                 f.close()
 
-    def loaddata(self, filename=None):
+    def loaddata(self, filename=None, fromdir=''):
         """Attempts to load dataset first from given file, 
         then from current data file, then from current checkpoint (or file).
         """
+
         if filename:
             openfile = filename
         elif self.datafile:
@@ -631,7 +641,7 @@ class ModelState:
             openfile = self.cp.datafile
         elif self.cpfile:
             # Try loading from file
-            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir)
             if self.cp:
                 openfile = self.cp.datafile
             else:
@@ -642,19 +652,21 @@ class ModelState:
             # No checkpoint and no file means no-go
             stderr.write("No checkpoint file to load!\n")
             return False
+        openpath = os.path.join(fromdir, openfile)
 
         # Load data now that filename is established
-        self.data = DataSet.loadfromfile(openfile)
+        self.data = DataSet.loadfromfile(openpath)
         if self.data:
             self.datafile = openfile
             return True
         else:
             return False
 
-    def loadmodel(self, filename=None):
+    def loadmodel(self, filename=None, fromdir=''):
         """Attempts to load model parameters first from given file, 
         then from current model file, then from current checkpoint (or file).
         """
+
         if filename:
             openfile = filename
         elif self.modelfile:
@@ -663,7 +675,7 @@ class ModelState:
             openfile = self.cp.modelfile
         elif self.cpfile:
             # Try loading from file
-            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir)
             if self.cp:
                 openfile = self.cp.modelfile
             else:
@@ -674,24 +686,24 @@ class ModelState:
             # No checkpoint and no file means no-go
             stderr.write("No checkpoint file to load!\n")
             return False
+        openpath = os.path.join(fromdir, openfile)
 
         # Load model now that filename is established
         useclass = self.modeltypes[self.modeltype]
-        self.model = useclass.loadfromfile(openfile)
+        self.model = useclass.loadfromfile(openpath)
         if self.model:
-            self.modelfile = openfile
             return True
         else:
             return False
 
-    def restore(self, checkpoint=None):
+    def restore(self, cpfile=None, fromdir=''):
         """Restores dataset and model params from specified checkpoint file.
         Defaults to stored checkpoint if none provided.
         """
 
-        if checkpoint:
+        if cpfile:
             # Checkpoint given, use that
-            cp = Checkpoint.loadcheckpoint(checkpoint)
+            cp = Checkpoint.loadcheckpoint(cpfile, fromdir)
             if cp:
                 self.cp = cp
             else:
@@ -701,7 +713,7 @@ class ModelState:
             cp = self.cp
         elif self.cpfile:
             # Try loading checkpoint from file
-            self.cp = Checkpoint.loadcheckpoint(self.cpfile)
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir)
             if self.cp:
                 cp = self.cp
             else:
@@ -716,7 +728,7 @@ class ModelState:
         # Load data and model, return True only if both work
         # Passing checkpoint's data/model filenames, overriding 
         # those already stored in model state
-        if self.loaddata(cp.datafile) and self.loadmodel(cp.modelfile):
+        if self.loaddata(cp.datafile, self.curdir) and self.loadmodel(cp.modelfile, self.curdir):
             return True
         else:
             return False
@@ -752,14 +764,15 @@ class ModelState:
         else:
             return False
 
-    def builddataset(self, datastr, seq_len=100, srcinfo=None):
+    def builddataset(self, datastr, seq_len=100, srcinfo=None, savedir=None):
         """Builds new dataset from string and saves to file in working directory."""
 
         # Build dataset from string
         self.data = DataSet(datastr, self.chars, seq_len, srcinfo)
 
-        # Save to file in working directory
-        self.datafile = self.data.savetofile(self.curdir)
+        # Save to specified dir if provided, otherwise curdir
+        usedir = savedir if savedir else self.curdir
+        self.datafile = self.data.savetofile(usedir)
 
         # Return true if both operations succeed
         if self.data and self.datafile:
@@ -782,7 +795,8 @@ class ModelState:
             stderr.write("Calculating initial loss estimate...\n")
             
             # We don't need anything fancy or long, just a rough baseline
-            loss_len = 100 if self.data.data_len >= 100 else self.data.data_len
+            data_len = self.data.batchepoch(8)
+            loss_len = 100 if data_len >= 100 else data_len
             loss = self.model.calc_loss(self.data, 0, batchsize=8, num_examples=loss_len)
 
             stderr.write("Initial loss: {0:.3f}\n".format(loss))
@@ -828,8 +842,9 @@ class ModelState:
 
         # Start with a blank state if specified, none stored, or wrong shape for batch size
         fresh_state = self.model.freshstate(batchsize)
-        if clear_state or not hasattr(self, 'laststate') or not hasattr(
-            self.laststate, 'shape') or self.laststate.shape != fresh_state.shape:
+        if clear_state or not hasattr(self, 'laststate') \
+            or not hasattr(self.laststate, 'shape') \
+            or self.laststate.shape != fresh_state.shape:
             train_state = fresh_state
         else:
             train_state = self.laststate
@@ -913,6 +928,30 @@ def printprogress(charset):
         #genstr, _ = model.genchars(charset, 100)
         print(genstr + "\n")
     return retfunc
+
+def _fix_old_filenames(obj, fromdir):
+    """Rewrite stored filenames from old versions (including paths) to
+    new versions (relative to dir).
+    """
+    # Internal func to get proper filename
+    def _fixedname(filename, fromdir):
+        if os.path.isabs(filename):
+            return filename
+        else:
+            basename = os.path.basename(filename)
+            if os.path.join(fromdir, basename) == filename:
+                return basename
+            else:
+                return os.path.relpath(filename, fromdir)
+
+    # Check for various filename attributes on obj
+    if hasattr(obj, 'cpfile'):
+        obj.cpfile = _fixedname(obj.cpfile, fromdir)
+    if hasattr(obj, 'datafile'):
+        obj.datafile = _fixedname(obj.datafile, fromdir)
+    if hasattr(obj, 'modelfile'):
+        obj.modelfile = _fixedname(obj.modelfile, fromdir)
+
 
 # TODO: Non-Theano sigmoid
 # TODO: Non-Theano softmax
