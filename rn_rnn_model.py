@@ -45,6 +45,8 @@ class ModelParams:
         pass
     def _forward_step(self, x_t, s_t):
         pass
+    def _weight_cost(self, reg_lambda):
+        pass
 
     # Theano-generated model-dependent functions
     def gen_chars(self, *args, **kwargs):
@@ -151,13 +153,14 @@ class ModelParams:
         stdout.flush()
         time1 = time.time()
 
-        # Local binding for convenience
+        # Local bindings for convenience
         forward_step = self._forward_step
+        weight_cost = self._weight_cost
 
         # Scalar training parameters
         learnrate = T.scalar('learnrate')
         decayrate = T.scalar('decayrate')
-        #reg_lambda = T.scalar('reg_lambda')
+        reg_lambda = T.scalar('reg_lambda')
 
         ### BATCH-SEQUENCE TRAINING ###
 
@@ -195,11 +198,10 @@ class ModelParams:
         # of batches, then sum the individual sequence errors
         # (Hopefully Theano's auto-differentials follow this)
         o_errs_shuf = o_errs_res.dimshuffle(1, 0)
-        # TODO: add regularization term here, so each part of batch gets it
-        # (How to define generally, though -- maybe make that per-model somehow?)
         o_errs_sums = T.sum(o_errs_shuf, axis=1)
-        # Final cost (after regularization (if I ever put it in))
-        cost_bat = T.sum(o_errs_sums)
+        # Final cost (with regularization)
+        # (weight_cost() defined per-model)
+        cost_bat = T.sum(o_errs_sums) + weight_cost(reg_lambda)
 
         # Gradients
         dparams_bat = [ T.grad(cost_bat, p) for p in self.params.values() ]
@@ -220,11 +222,11 @@ class ModelParams:
         self.train_step_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat, 
                 th.Param(learnrate, default=0.001), 
-                th.Param(decayrate, default=0.95)],
+                th.Param(decayrate, default=0.95),
+                th.Param(reg_lambda, default=0.1)],
             outputs=s_out_bat,
             updates=train_updates_bat,
             name='train_step_bat')
-        #        th.Param(reg_lambda, default=0.1)],
 
         ### ERROR CHECKING ###
 

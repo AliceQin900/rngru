@@ -15,13 +15,15 @@ from rn_gru_encode import GRUEncode
 class HyperParams:
     """Hyperparameters for GRU setup."""
 
-    def __init__(self, vocab_size, state_size=128, layers=1, bptt_truncate=-1, learnrate=0.001, decay=0.95):
+    def __init__(self, vocab_size, state_size=128, layers=1, bptt_truncate=-1, 
+        learnrate=0.001, decay=0.95, regcost=0.1):
         self.vocab_size = vocab_size
         self.state_size = state_size
         self.layers = layers
         self.bptt_truncate = bptt_truncate
         self.learnrate = learnrate
         self.decay = decay
+        self.regcost = regcost
 
 
 # TODO (maybe): change to let CharSet get frequencies from strings
