@@ -186,22 +186,35 @@ class DataSet:
         self.data_len = len(self.x_array)
 
         # Create one-hot encodings
-        self.build_onehots()
+        #self.build_onehots()
 
     def __getstate__(self):
         state = self.__dict__.copy()
+
         # References to onehot-encoded shared data
         # shouldn't be serialized here, so remove them
         if 'x_onehots' in state:
             state['x_onehots'] = None
+
         if 'y_onehots' in state:
             state['y_onehots'] = None
+
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        if 'charsize' in state:
-            self.build_onehots()
+
+        if 'data_len' not in state:
+            # No data length stored (must be old)
+            self.data_len = len(self.x_array)
+
+        if 'charsize' not in state:
+            # No vocab size stored, infer
+            stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
+            vocab = np.amax(self.y_array) + 1
+            self.charsize = vocab
+            stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
+            #self.build_onehots(vocab)
 
     @staticmethod
     def loadfromfile(filename, charset=None):
@@ -259,22 +272,10 @@ class DataSet:
             self.charsize = vocab_size
             vocab = vocab_size
         else:
-            try:
-                vocab = self.charsize
-            except AttributeError as e:
-                stderr.write("No vocabulary size found for onehot conversion, inferring from dataset...\n")
-                vocab = np.amax(self.y_array) + 1
-                self.charsize = vocab
-                stderr.write("Found vocabulary size of: {0:d}\n".format(vocab))
+            vocab = self.charsize
 
         stderr.write("Constructing one-hot vector data...")
         stderr.flush()
-
-        try:
-            datalen = self.data_len
-        except AttributeError:
-            datalen = len(self.x_array)
-            self.data_len = datalen
 
         time1 = time.time()
 
@@ -299,7 +300,7 @@ class DataSet:
         return spacing + offset
 
 
-    def batch(self, pos, batchsize=16):
+    def batch(self, pos=0, batchsize=16):
         """Gets batch of data starting at pos, and evenly spaced along the first
         axis of each onehot array.
         Returns 3-dim ndarrays from x_onehots and y_onehots.
@@ -312,8 +313,16 @@ class DataSet:
         # Have to transpose so that 2nd/3rd dimensions are matrices corresponding
         # to batchsize rows and onehot columns, and the 1st dim (slice indicies) are
         # the sequences the batch training function will take
-        xbatch = self.x_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
-        ybatch = self.y_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
+        if self.x_onehots is not None and self.y_onehots is not None:
+            # Onehots already built, take from them
+            xbatch = self.x_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
+            ybatch = self.y_onehots.take(indices, axis=0, mode='wrap').transpose(1, 0, 2)
+        else:
+            # Build onehots for this batch
+            xidxs = self.x_array.take(indices, axis=0, mode='wrap').transpose(1, 0)
+            yidxs = self.y_array.take(indices, axis=0, mode='wrap').transpose(1, 0)
+            xbatch = np.eye(self.charsize, dtype=th.config.floatX)[xidxs]
+            ybatch = np.eye(self.charsize, dtype=th.config.floatX)[yidxs]
 
         return xbatch, ybatch
 
