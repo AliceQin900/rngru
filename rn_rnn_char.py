@@ -185,7 +185,9 @@ class DataSet:
 
         self.data_len = len(self.x_array)
 
-        # Create one-hot encodings
+        # Don't create one-hot encodings by default
+        self.x_onehots = None
+        self.y_onehots = None
         #self.build_onehots()
 
     def __getstate__(self):
