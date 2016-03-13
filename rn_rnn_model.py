@@ -155,7 +155,7 @@ class ModelParams:
 
         # Local bindings for convenience
         forward_step = self._forward_step
-        weight_cost = self._weight_cost
+        reg_cost = self._reg_cost
 
         # Scalar training parameters
         learnrate = T.scalar('learnrate')
@@ -200,8 +200,8 @@ class ModelParams:
         o_errs_shuf = o_errs_res.dimshuffle(1, 0)
         o_errs_sums = T.sum(o_errs_shuf, axis=1)
         # Final cost (with regularization)
-        # (weight_cost() defined per-model)
-        cost_bat = T.sum(o_errs_sums) + weight_cost(reg_lambda)
+        # (reg_cost() defined per-model)
+        cost_bat = T.sum(o_errs_sums) + reg_cost(reg_lambda)
 
         # Gradients
         dparams_bat = [ T.grad(cost_bat, p) for p in self.params.values() ]
@@ -232,16 +232,16 @@ class ModelParams:
 
         # Error/cost calculations
         self.errs_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
             outputs=[o_errs_res, s_out_bat])
         self.err_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
             outputs=[cost_bat, s_out_bat])
 
         # Gradient calculations
         # We'll use this at some point for gradient checking
         self.grad_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
             outputs=dparams_bat)
 
         ### Whew, I think we're done! ###
@@ -308,7 +308,7 @@ class ModelParams:
         data_pos = startpos
         for valid_pos in range(valid_len):
             xbatch, ybatch = dataset.batch(data_pos, batchsize)
-            errors[valid_pos], step_state = self.err_bat(xbatch, ybatch, step_state)
+            errors[valid_pos], step_state = self.err_bat(xbatch, ybatch, step_state, self.hyper.regcost)
             data_pos += 1
             # Advance position and overflow
             if data_pos >= data_len:
@@ -355,7 +355,7 @@ class ModelParams:
             # Learning step
             xbatch, ybatch = dataset.batch(self.pos, batchsize)
             step_state = self.train_step_bat(xbatch, ybatch, step_state, 
-                self.hyper.learnrate, self.hyper.decay)
+                self.hyper.learnrate, self.hyper.decay, self.hyper.regcost)
 
             # Advance position and overflow
             self.pos += 1
@@ -385,7 +385,8 @@ class ModelParams:
 
         # Time training step
         time1 = time.time()
-        self.train_step_bat(xbatch, ybatch, start_state, self.hyper.learnrate, self.hyper.decay)
+        self.train_step_bat(xbatch, ybatch, start_state, 
+            self.hyper.learnrate, self.hyper.decay, self.hyper.regcost)
         time2 = time.time()
 
         stdout.write(
@@ -394,7 +395,7 @@ class ModelParams:
 
         # Time loss calc step
         time1 = time.time()
-        self.err_bat(xbatch, ybatch, start_state)
+        self.err_bat(xbatch, ybatch, start_state, self.hyper.regcost)
         time2 = time.time()
 
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(

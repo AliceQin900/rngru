@@ -89,7 +89,7 @@ class GRUEncode(ModelParams):
         return o_t, s_next
 
     # Regularization cost
-    def _weight_cost(self, reg_lambda):
+    def _reg_cost(self, reg_lambda):
         weightsum = T.sum(T.sqr(self.params['E'])) + \
             T.sum(T.sqr(self.params['U'])) + \
             T.sum(T.sqr(self.params['W'])) + \
