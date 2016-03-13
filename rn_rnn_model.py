@@ -226,13 +226,14 @@ class ModelParams:
         o_errs_res = T.reshape(o_errs_bat, (o_bat.shape[0], o_bat.shape[1]))
 
         # Next, we reshuffle to group sequences together instead
-        # of batches, then sum the individual sequence errors
-        # (Hopefully Theano's auto-differentials follow this)
+        # of batches, then sum the individual sequence errors.
+        # (Hopefully Theano's auto-differentials follow this...)
         o_errs_shuf = o_errs_res.dimshuffle(1, 0)
         o_errs_sums = T.sum(o_errs_shuf, axis=1)
-        # Regularization term (without averaging over samples (done outside Theano))
-        # reg_cost() defined per-model
-        reg_sum = reg_cost(reg_lambda)
+        # Regularization term (averaged over batch size but not 
+        # over number of samples (done outside Theano)).
+        # reg_cost() defined per-model.
+        reg_sum = reg_cost(reg_lambda) / o_errs_res.shape[1]
         # Final cost (with regularization)
         cost_bat = T.sum(o_errs_sums) + reg_sum
 
@@ -265,7 +266,7 @@ class ModelParams:
 
         # Mostly for internal debug, returns unsummed error tensor and regularization cost
         self.errs_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.0)], 
             outputs=[o_errs_res, reg_sum, s_out_bat])
 
         # Full error sum, not averaged over sample size (done in outer non-Theano func)
