@@ -962,8 +962,9 @@ def printprogress(charset):
 
 def generatestring(modelstate, numchars=100, temp=0.5, init_state=None, ret_state=False):
     '''Generate string from given model state.'''
-    genstr, newstate = modelstate.model.genchars(modelstate.chars, numchars, temp, init_state)
-    print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{3}\n".format(
+    genstr, newstate = modelstate.model.genchars(modelstate.chars, numchars, 
+        init_state=init_state, temperature=temp)
+    print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{2}\n".format(
         numchars, temp, genstr))
     if ret_state:
         return newstate
