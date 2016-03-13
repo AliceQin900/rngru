@@ -83,7 +83,7 @@ class ModelParams:
         k = T.iscalar('k')
         temperature = T.scalar('temperature')
 
-        rng = T.shared_randomstreams.RandomStreams(seed=614731559)
+        rng = T.shared_randomstreams.RandomStreams(seed=(int(time.time()) % 1000000000))
 
         # Generate output sequence based on input single onehot and given state.
 

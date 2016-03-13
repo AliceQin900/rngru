@@ -119,6 +119,15 @@ class CharSet:
         vec[idx] = 1.0
         return vec
 
+    def encodeonehots(self, encodestr):
+        '''Encodes string as matrix of one-hot vectors.'''
+
+        # First get indices
+        idxs = [ self.idxofchar(ch) for ch in encodestr ]
+
+        # Now build onehots
+        return np.eye(self.vocab_size, dtype=th.config.floatX)[idxs]
+
     def randomidx(self, allow_newline=False):
         '''Returns random character, excluding unknown_char.'''
         forbidden = {self.unknown_idx}
@@ -723,7 +732,14 @@ class ModelState:
             if cp:
                 self.cp = cp
             else:
-                return False
+                # Try using current directory name at front of given dirname+filename
+                cppath = os.path.join(fromdir, cpfile)
+                cp = Checkpoint.loadcheckpoint(cppath, self.curdir, fix_old)
+                if cp:
+                    self.cp = cp
+                else:
+                    # Still not found (loadcheckpoint will print error for us)
+                    return False
         elif self.cp:
             # Try stored checkpoint
             cp = self.cp
@@ -943,6 +959,36 @@ def printprogress(charset):
         genstr, _ = model.genchars(charset, 100, init_state=init_state, temperature=0.5)
         print(genstr + "\n")
     return retfunc
+
+def generatestring(modelstate, numchars=100, temp=0.5, init_state=None, ret_state=False):
+    '''Generate string from given model state.'''
+    genstr, newstate = modelstate.model.genchars(modelstate.chars, numchars, temp, init_state)
+    print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{3}\n".format(
+        numchars, temp, genstr))
+    if ret_state:
+        return newstate
+    else:
+        return None
+
+def trackneurons(modelstate, usestr, temp=0.5, ret_output=False):
+    '''Track output of model for given string input. Useful for observing neuron
+    activity as a sequence is processed.
+    Returns 3D array of states along sequence, in shape (layer, neuron, sequence).
+    Optionally returns prediction outputs if ret_output=True.
+    '''
+    # Encode string as onehots
+    onehots = modelstate.chars.encodeonehots(usestr)
+    # Get new state
+    start_state = modelstate.model.freshstate(0)
+    # Process sequence
+    out_seq, state_seq = modelstate.model.seq_process(onehots, start_state, temp)
+    # Reshuffle state output
+    state_t = state_seq.transpose(1, 2, 0)
+    if ret_output:
+        return out_seq, state_t
+    else:
+        return state_t
+
 
 def _fix_old_filenames(obj, fromdir):
     """Rewrite stored filenames from old versions (including paths) to
