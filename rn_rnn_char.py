@@ -25,6 +25,16 @@ class HyperParams:
         self.decay = decay
         self.regcost = regcost
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # For backwards compatibility with models without regularization
+        if 'regcost' not in state:
+            self.regcost = 0.0
+
 
 # TODO (maybe): change to let CharSet get frequencies from strings
 # TODO: save/load charset in its own file
@@ -391,8 +401,8 @@ class Checkpoint:
                 return None
             else:
                 return cp
-        finally:
-            f.close()
+            finally:
+                f.close()
 
     def printstats(self, outfile):
         """Prints checkpoint stats to file-like object."""
@@ -571,7 +581,7 @@ class ModelState:
                 stderr.write("Using working directory {0}/\n".format(modelstate.curdir))
 
                 # Fix filenames if necessary
-                if fromdir:
+                if fromdir and fix_old:
                     _fix_old_filenames(modelstate, fromdir)
 
                 # Reload checkpoint, if present
@@ -698,14 +708,14 @@ class ModelState:
         else:
             return False
 
-    def restore(self, cpfile=None, fromdir=''):
+    def restore(self, cpfile=None, fromdir='', fix_old=False):
         """Restores dataset and model params from specified checkpoint file.
         Defaults to stored checkpoint if none provided.
         """
 
         if cpfile:
             # Checkpoint given, use that
-            cp = Checkpoint.loadcheckpoint(cpfile, fromdir)
+            cp = Checkpoint.loadcheckpoint(cpfile, fromdir, fix_old)
             if cp:
                 self.cp = cp
             else:
@@ -715,7 +725,7 @@ class ModelState:
             cp = self.cp
         elif self.cpfile:
             # Try loading checkpoint from file
-            self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir)
+            self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir, fix_old)
             if self.cp:
                 cp = self.cp
             else:
@@ -943,8 +953,10 @@ def _fix_old_filenames(obj, fromdir):
             basename = os.path.basename(filename)
             if os.path.join(fromdir, basename) == filename:
                 return basename
-            else:
+            elif os.path.dirname(filename):
                 return os.path.relpath(filename, fromdir)
+            else:
+                return filename
 
     # Check for various filename attributes on obj
     if hasattr(obj, 'cpfile'):
