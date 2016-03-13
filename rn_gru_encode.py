@@ -96,3 +96,10 @@ class GRUEncode(ModelParams):
             T.sum(T.sqr(self.params['V']))
         return reg_lambda * weightsum / 2.0
 
+    # State matrix
+    def freshstate(self, batchsize):
+        if batchsize > 0:
+            return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
+        else:
+            return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
+

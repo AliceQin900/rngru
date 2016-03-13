@@ -40,12 +40,14 @@ class ModelParams:
         self._built_t = False
         self._build_g()
 
-    # Model-specific definitions of parameters and forward propagation step function
+    # Model-specific definitions of parameters, forward propagation, regularization, state initialization
     def _build_p(self):
         pass
     def _forward_step(self, x_t, s_t):
         pass
     def _weight_cost(self, reg_lambda):
+        pass
+    def freshstate(self, batchsize):
         pass
 
     # Theano-generated model-dependent functions
@@ -223,7 +225,7 @@ class ModelParams:
             inputs=[x_bat, y_bat, s_in_bat, 
                 th.Param(learnrate, default=0.001), 
                 th.Param(decayrate, default=0.95),
-                th.Param(reg_lambda, default=0.1)],
+                th.Param(reg_lambda, default=0.0)],
             outputs=s_out_bat,
             updates=train_updates_bat,
             name='train_step_bat')
@@ -235,13 +237,13 @@ class ModelParams:
             inputs=[x_bat, y_bat, s_in_bat], 
             outputs=[o_errs_res, s_out_bat])
         self.err_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.0)], 
             outputs=[cost_bat, s_out_bat])
 
         # Gradient calculations
         # We'll use this at some point for gradient checking
         self.grad_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
+            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.0)], 
             outputs=dparams_bat)
 
         ### Whew, I think we're done! ###
@@ -286,12 +288,6 @@ class ModelParams:
         else:
             if isinstance(outfile, str):
                 stdout.write("Saved model parameters to {0}\n".format(outfile))
-
-    def freshstate(self, batchsize):
-        if batchsize > 0:
-            return np.zeros([self.hyper.layers, batchsize, self.hyper.state_size], dtype=th.config.floatX)
-        else:
-            return np.zeros([self.hyper.layers, self.hyper.state_size], dtype=th.config.floatX)
 
     def calc_loss(self, dataset, startpos=0, batchsize=16, num_examples=0, init_state=None):
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
