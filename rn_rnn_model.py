@@ -232,7 +232,7 @@ class ModelParams:
 
         # Error/cost calculations
         self.errs_bat = th.function(
-            inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
+            inputs=[x_bat, y_bat, s_in_bat], 
             outputs=[o_errs_res, s_out_bat])
         self.err_bat = th.function(
             inputs=[x_bat, y_bat, s_in_bat, th.Param(reg_lambda, default=0.1)], 
