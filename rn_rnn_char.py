@@ -342,16 +342,17 @@ class DataSet:
 class Checkpoint:
     """Checkpoint for model training."""
 
-    def __init__(self, datafile, modelfile, cp_date, epoch, pos, loss):
+    def __init__(self, datafile, modelfile, cp_date, epoch, pos, loss, laststate=None):
         self.datafile = datafile
         self.modelfile = modelfile
         self.cp_date = cp_date
         self.epoch = epoch
         self.pos = pos
         self.loss = loss
+        self.laststate = laststate
 
     @classmethod
-    def createcheckpoint(cls, savedir, datafile, modelparams, loss):
+    def createcheckpoint(cls, savedir, datafile, modelparams, loss, laststate=None):
         """Creates and saves modelparams and pickled training checkpoint into savedir.
         Returns new checkpoint and filename if successful, or (None, None) otherwise.
         """
@@ -377,7 +378,7 @@ class Checkpoint:
             stderr.write("Saved model parameters to {0}\n".format(modelpath))
 
             # Create checkpoint
-            cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss)
+            cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss, laststate)
             cpfilename = basefilename + ".p".format(loss)
             cppath = os.path.join(savedir, cpfilename)
 
@@ -409,6 +410,9 @@ class Checkpoint:
                 cp = pickle.load(f)
                 if fromdir and fix_old:
                     _fix_old_filenames(cp, fromdir)
+                # For older versions
+                if not hasattr(cp, 'laststate'):
+                    cp.laststate = None
             except Exception as e:
                 stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cppath, e))
                 return None
@@ -480,6 +484,8 @@ class ModelState:
         # For upgrading of older versions
         if 'modelfile' in state:
             del state['modelfile']
+        if 'laststate' not in state:
+            state['laststate'] = None
 
         self.__dict__.update(state)
 
@@ -766,6 +772,9 @@ class ModelState:
         # Passing checkpoint's data/model filenames, overriding 
         # those already stored in model state
         if self.loaddata(cp.datafile, self.curdir) and self.loadmodel(cp.modelfile, self.curdir):
+            # Load checkpoint's last state, if present
+            if isinstance(cp.laststate, np.ndarray):
+                self.laststate = cp.laststate
             return True
         else:
             return False
@@ -787,7 +796,7 @@ class ModelState:
         usedir = savedir if savedir else self.curdir
 
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, loss)
+        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, loss, self.laststate)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
