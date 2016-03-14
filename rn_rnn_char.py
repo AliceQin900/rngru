@@ -519,7 +519,7 @@ class ModelState:
         
         # Next, read source file
         try:
-            f = open(srcfile, 'r', encoding='utf-8')
+            f = open(srcfile, 'r', encoding='utf-8', errors='replace')
         except OSError as e:
             stderr.write("Error opening source file {0}: {1}".format(srcfile, e))
             raise e
