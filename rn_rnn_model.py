@@ -287,6 +287,8 @@ class ModelParams:
 
     @classmethod
     def loadfromfile(cls, infile):
+        """Load model parameters from file and rebuild model."""
+
         with np.load(infile) as f:
             # Extract hyperparams and position
             p = f['p']
@@ -305,6 +307,8 @@ class ModelParams:
             return model
 
     def savetofile(self, outfile):
+        """Save model parameters to file."""
+
         # Pickle non-matrix params into bytestring, then convert to numpy byte array
         pklbytes = pickle.dumps({'hyper': self.hyper, 'epoch': self.epoch, 'pos': self.pos}, 
             protocol=pickle.HIGHEST_PROTOCOL)
@@ -323,6 +327,12 @@ class ModelParams:
                 stdout.write("Saved model parameters to {0}\n".format(outfile))
 
     def calc_loss(self, dataset, startpos=0, batchsize=16, num_examples=0, init_state=None):
+        """Calculates average cross-entropy loss over given batchsize."""
+
+        # First build training functions if not already done
+        if not self._built_t:
+            self._build_t()
+
         step_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
 
         if batchsize < 1:
@@ -354,9 +364,6 @@ class ModelParams:
 
         Optional callback function called after callback_every, with 
         model and current state as arguments.
-
-        Inputs and outputs assumed to be numpy arrays (or equivalent)
-        of 2 dimensions.
 
         If num_examples is 0, will train for full epoch.
         """
@@ -403,10 +410,13 @@ class ModelParams:
         return step_state
 
     def traintime(self, dataset, batchsize=16, pos=0, init_state=None):
-        """Prints time for batch training step (default size 16).
-        Input must be 3D tensor of matrices of one-hot vectors.
-        """
-        # Fresh state
+        """Prints time for batch training step (default size 16)."""
+
+         # First build training functions if not already done
+        if not self._built_t:
+            self._build_t()
+
+       # Fresh state
         start_state = init_state if isinstance(init_state, np.ndarray) else self.freshstate(batchsize)
 
         # Get slice
@@ -430,7 +440,7 @@ class ModelParams:
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             xbatch.shape[0], (time2 - time1) * 1000.0))
 
-    def genchars(self, charset, numchars, init_state=None, seedch=None, use_max=False, temperature=1.0):
+    def genchars(self, charset, numchars, init_state=None, seedch=None, use_max=False, temperature=0.5):
         """Generate string of characters from current model parameters.
 
         If use_max is True, will select most-likely character at each step.

@@ -3,6 +3,7 @@
 # Module dependencies
 import os, datetime, pickle, random, time
 from sys import stdin, stdout, stderr
+from math import log
 import numpy as np
 import theano as th
 import theano.tensor as T
@@ -394,7 +395,8 @@ class Checkpoint:
 
     @classmethod
     def loadcheckpoint(cls, cpfile, fromdir='', fix_old=False):
-        """Loads checkpoint from saved file and returns checkpoint object."""
+        """Loads checkpoint from saved file relative to fromdir and returns checkpoint object."""
+
         cppath = os.path.join(fromdir, cpfile)
         try:
             f = open(cppath, 'rb')
@@ -418,12 +420,14 @@ class Checkpoint:
     def printstats(self, outfile):
         """Prints checkpoint stats to file-like object."""
 
-        printstr = """Checkpoint date: {0}
+        printstr = """
+Checkpoint date: {0}
 Dataset file: {1}
 Model file: {2}
 Epoch: {3:d}
 Position: {4:d}
 Loss: {5:.4f}
+Log loss: {6:.4f}
 
 """
         outfile.write(printstr.format(
@@ -432,7 +436,8 @@ Loss: {5:.4f}
             self.modelfile, 
             self.epoch, 
             self.pos, 
-            self.loss))
+            self.loss,
+            log(self.loss)))
         
 
 # TODO: allow initialization from already-constructed charset and dataset
@@ -827,11 +832,12 @@ class ModelState:
             stderr.write("Calculating initial loss estimate...\n")
             
             # We don't need anything fancy or long, just a rough baseline
-            data_len = self.data.batchepoch(8)
-            loss_len = 100 if data_len >= 100 else data_len
+            data_len = self.data.batchepoch(16)
+            loss_len = 50 if data_len >= 50 else data_len
             loss = self.model.calc_loss(self.data, 0, batchsize=8, num_examples=loss_len)
 
             stderr.write("Initial loss: {0:.3f}\n".format(loss))
+            stderr.write("Initial log loss: {0:.3f}\n".format(log(loss)))
 
             # Take checkpoint
             self.newcheckpoint(loss, savedir=checkpointdir)
@@ -916,6 +922,7 @@ class ModelState:
             loss = self.model.calc_loss(self.data, self.model.pos, batchsize=batchsize, num_examples=valid_len)
 
             stdout.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
+            stdout.write("Previous log loss: {0:.4f}, current log loss: {1:.4f}\n".format(log(self.cp.loss), log(loss)))
 
             # Adjust learning rate if necessary
             if loss / self.cp.loss >= 1.02:
@@ -947,6 +954,36 @@ class ModelState:
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
 
+    def generatestring(self, numchars=100, temp=0.5, init_state=None, ret_state=False):
+        '''Generate string from current model state.'''
+        genstr, newstate = self.model.genchars(self.chars, numchars, 
+            init_state=init_state, temperature=temp)
+        print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{2}\n".format(
+            numchars, temp, genstr))
+        if ret_state:
+            return newstate
+        else:
+            return None
+
+    def trackneurons(self, usestr, temp=0.5, ret_output=False):
+        '''Track output of model for given string input. Useful for observing neuron
+        activity as a sequence is processed.
+        Returns 3D array of states along sequence, in shape (layer, neuron, sequence).
+        Optionally returns prediction outputs if ret_output=True.
+        '''
+        # Encode string as onehots
+        onehots = self.chars.encodeonehots(usestr)
+        # Get new state
+        start_state = self.model.freshstate(0)
+        # Process sequence
+        out_seq, state_seq = self.model.seq_process(onehots, start_state, temp)
+        # Reshuffle state output
+        state_t = state_seq.transpose(1, 2, 0)
+        if ret_output:
+            return out_seq, state_t
+        else:
+            return state_t
+
 
 # Unattached functions
 
@@ -959,37 +996,6 @@ def printprogress(charset):
         genstr, _ = model.genchars(charset, 100, init_state=init_state, temperature=0.5)
         print(genstr + "\n")
     return retfunc
-
-def generatestring(modelstate, numchars=100, temp=0.5, init_state=None, ret_state=False):
-    '''Generate string from given model state.'''
-    genstr, newstate = modelstate.model.genchars(modelstate.chars, numchars, 
-        init_state=init_state, temperature=temp)
-    print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{2}\n".format(
-        numchars, temp, genstr))
-    if ret_state:
-        return newstate
-    else:
-        return None
-
-def trackneurons(modelstate, usestr, temp=0.5, ret_output=False):
-    '''Track output of model for given string input. Useful for observing neuron
-    activity as a sequence is processed.
-    Returns 3D array of states along sequence, in shape (layer, neuron, sequence).
-    Optionally returns prediction outputs if ret_output=True.
-    '''
-    # Encode string as onehots
-    onehots = modelstate.chars.encodeonehots(usestr)
-    # Get new state
-    start_state = modelstate.model.freshstate(0)
-    # Process sequence
-    out_seq, state_seq = modelstate.model.seq_process(onehots, start_state, temp)
-    # Reshuffle state output
-    state_t = state_seq.transpose(1, 2, 0)
-    if ret_output:
-        return out_seq, state_t
-    else:
-        return state_t
-
 
 def _fix_old_filenames(obj, fromdir):
     """Rewrite stored filenames from old versions (including paths) to
@@ -1020,3 +1026,4 @@ def _fix_old_filenames(obj, fromdir):
 # TODO: Non-Theano sigmoid
 # TODO: Non-Theano softmax
 # TODO: Command-line options for generation, training
+
