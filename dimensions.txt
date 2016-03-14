@@ -1,0 +1,68 @@
+Parameters, dimensions, and other such things:
+
+Defaults:
+
+state size [s]:		 128
+vocab size [v]:	 charset
+layers [L]:			   1
+sequence length:	 100
+learning rate:		1e-3
+rmsprop decay:		0.95
+reg lambda:			 0.1
+
+
+Vanilla RNN:
+
+U / Wxh		[s] * [v]
+W / Whh		[s] * [s]
+V / Why		[v] * [s]
+
+Total parameters: 2[s][v] + [s]^2
+
+
+GRUEncode:
+
+Input layer:
+
+E			[s] * [v]
+
+Hidden layers [L]:
+
+Uz			[s] * [s]
+Ur			[s] * [s]
+Uh			[s] * [s]
+Wz			[s] * [s]
+Wr			[s] * [s]
+Wh			[s] * [s]
+
+Output layer:
+V			[v] * [s]
+
+Total parameters: 2[v][s] + 6[L][s]^2
+
+
+GRUResize:
+
+Input layer:
+
+Ez			[s] * [v]
+Er			[s] * [v]
+Eh			[s] * [v]
+Fz			[s] * [s]
+Fr			[s] * [s]
+Fh			[s] * [s]
+
+Per subsequent layer [L-1]:
+
+Uz			[s] * [s]
+Ur			[s] * [s]
+Uh			[s] * [s]
+Wz			[s] * [s]
+Wr			[s] * [s]
+Wh			[s] * [s]
+
+Output layer:
+V			[v] * [s]
+
+Total parameters: 4[v][s] + (6[L-1]+3)[s]^2
+
