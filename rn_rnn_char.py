@@ -948,7 +948,7 @@ class ModelState:
             stdout.write("Previous log loss: {0:.4f}, current log loss: {1:.4f}\n".format(log(self.cp.loss), log(loss)))
 
             # Adjust learning rate if necessary
-            lossdiff = log(loss) / log(self.cp.loss)
+            lossdiff = loss / self.cp.loss
             if lossdiff >= 1.02:
                 # Loss increasing, lower learning rate
                 self.model.hyper.learnrate *= 0.5
