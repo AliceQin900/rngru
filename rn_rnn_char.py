@@ -1070,12 +1070,12 @@ class ModelState:
         timetaken = time2 - time1
 
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
-        stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n".format(timetaken, timetaken / float(num_rounds)))
+        stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n\n".format(timetaken, timetaken / float(num_rounds)))
 
-    def generatestring(self, numchars=100, temp=0.5, init_state=None, ret_state=False):
+    def generatestring(self, numchars=100, temp=0.5, seed='\n', init_state=None, ret_state=False):
         '''Generate string from current model state.'''
         genstr, newstate = self.model.genchars(self.chars, numchars, 
-            init_state=init_state, temperature=temp)
+            init_state=init_state, seedch=seed, temperature=temp)
         print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{2}\n".format(
             numchars, temp, genstr))
         if ret_state:
