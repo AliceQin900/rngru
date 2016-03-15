@@ -504,9 +504,15 @@ class ModelState:
         self.__dict__.update(state)
 
     @classmethod
-    def initfromsrcfile(cls, srcfile, usedir, modeltype='GRUEncode', *, seq_len=100, init_checkpoint=True, **kwargs):
+    def initfromsrcfile(cls, srcfile, usedir, *, modeltype='GRUEncode', 
+        seq_len=100, trainfrac=0.9, init_checkpoint=True, **kwargs):
         """Initializes a complete model based on given source textfile and hyperparameters.
+
+        Parses data into training and validation sets in proportion to 
+        (trainfrac, 1.0-trainfrac), split into sequences of seq_len.
+
         Creates initial checkpoint after model creation if init_checkpoint is True.
+
         Additional keyword arguments are passed to HyperParams.
         """
         
@@ -519,14 +525,22 @@ class ModelState:
         
         # Next, read source file
         try:
-            f = open(srcfile, 'r', encoding='utf-8', errors='replace')
+            f = open(srcfile, 'rb')
         except OSError as e:
             stderr.write("Error opening source file {0}: {1}".format(srcfile, e))
             raise e
         else:
-            datastr = f.read()
-        finally:
+            databytes = f.read()
             f.close()
+
+        # Try UTF-8 first, fall back to cp1252, then ascii with backslashreplace
+        try:
+            datastr = databytes.decode(encoding='utf-8')
+        except UnicodeDecodeError:
+            try:
+                datastr = databytes.decode(encoding='cp1252')
+            except UnicodeDecodeError:
+                datastr = databytes.decode(encoding='ascii', errors='backslashreplace')
 
         # Determine full path of working dir and base name of source file
         # Will be using these later on
