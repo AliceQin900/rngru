@@ -85,7 +85,7 @@ class CharSet:
         # Find characters that begin lines
         self.findlinestarts(datastr)
 
-        stderr.write("Initialized character set, size: {0:d}\n".format(self.vocab_size))
+        stderr.write("Initialized character set, size: {0:d}\n\n".format(self.vocab_size))
 
     @classmethod
     def _linefinder(cls, datastr):
@@ -356,8 +356,9 @@ class DataSet:
 class Checkpoint:
     """Checkpoint for model training."""
 
-    def __init__(self, datafile, modelfile, cp_date, epoch, pos, loss, laststate=None):
+    def __init__(self, datafile, validfile, modelfile, cp_date, epoch, pos, loss, laststate=None):
         self.datafile = datafile
+        self.validfile = validfile
         self.modelfile = modelfile
         self.cp_date = cp_date
         self.epoch = epoch
@@ -366,7 +367,7 @@ class Checkpoint:
         self.laststate = laststate
 
     @classmethod
-    def createcheckpoint(cls, savedir, datafile, modelparams, loss, laststate=None):
+    def createcheckpoint(cls, savedir, datafile, validfile, modelparams, loss, laststate=None):
         """Creates and saves modelparams and pickled training checkpoint into savedir.
         Returns new checkpoint and filename if successful, or (None, None) otherwise.
         """
@@ -392,7 +393,8 @@ class Checkpoint:
             stderr.write("Saved model parameters to {0}\n".format(modelpath))
 
             # Create checkpoint
-            cp = cls(datafile, modelfilename, modeldatetime, modelparams.epoch, modelparams.pos, loss, laststate)
+            cp = cls(datafile, validfile, modelfilename, modeldatetime, 
+                modelparams.epoch, modelparams.pos, loss, laststate)
             cpfilename = basefilename + ".p".format(loss)
             cppath = os.path.join(savedir, cpfilename)
 
@@ -422,11 +424,14 @@ class Checkpoint:
             try:
                 stderr.write("Restoring checkpoint from file {0}...\n".format(cppath))
                 cp = pickle.load(f)
-                if fromdir and fix_old:
-                    _fix_old_filenames(cp, fromdir)
                 # For older versions
                 if not hasattr(cp, 'laststate'):
                     cp.laststate = None
+                if not hasattr(cp, 'validfile'):
+                    cp.validfile = None
+                # Fixup filenames if requested
+                if fromdir and fix_old:
+                    _fix_old_filenames(cp, fromdir)
             except Exception as e:
                 stderr.write("Error restoring checkpoint from file {0}:\n{1}\n".format(cppath, e))
                 return None
@@ -440,17 +445,19 @@ class Checkpoint:
 
         printstr = """
 Checkpoint date: {0}
-Dataset file: {1}
-Model file: {2}
-Epoch: {3:d}
-Position: {4:d}
-Loss: {5:.4f}
-Log loss: {6:.4f}
+Training data file: {1}
+Validation data file: {2:s}
+Model file: {3}
+Epoch: {4:d}
+Position: {5:d}
+Loss: {6:.4f}
+Log loss: {7:.4f}
 
 """
         outfile.write(printstr.format(
             self.cp_date.strftime("%Y-%m-%d %H:%M:%S %Z"), 
             self.datafile, 
+            self.validfile, 
             self.modelfile, 
             self.epoch, 
             self.pos, 
@@ -473,7 +480,7 @@ class ModelState:
     }
 
     def __init__(self, chars, curdir, modeltype='GRUEncode', srcinfo=None, cpfile=None, 
-        cp=None, datafile=None, data=None, model=None):
+        cp=None, datafile=None, data=None, validfile=None, valid=None, model=None):
         self.chars = chars
         self.curdir = curdir
         self.modeltype = modeltype
@@ -482,15 +489,18 @@ class ModelState:
         self.cp = cp
         self.datafile = datafile
         self.data = data
+        self.validfile = validfile if validfile else datafile
+        self.valid = valid if valid else data
         self.model = model
         self.laststate = None
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        # References to checkpoint, dataset, and model params 
+        # References to checkpoint, datasets, and model params 
         # shouldn't be serialized here, so remove them
         state['cp'] = None
         state['data'] = None
+        state['valid'] = None
         state['model'] = None
         return state
 
@@ -500,6 +510,9 @@ class ModelState:
             del state['modelfile']
         if 'laststate' not in state:
             state['laststate'] = None
+        if 'validfile' not in state:
+            state['validfile'] = None
+            state['valid'] = None
 
         self.__dict__.update(state)
 
@@ -521,14 +534,14 @@ class ModelState:
             os.makedirs(usedir, exist_ok=True)
         except OSError as e:
             stderr.write("Error creating directory {0}: {1}".format(srcfile, e))
-            raise e
+            return None
         
         # Next, read source file
         try:
             f = open(srcfile, 'rb')
         except OSError as e:
             stderr.write("Error opening source file {0}: {1}".format(srcfile, e))
-            raise e
+            return None
         else:
             databytes = f.read()
             f.close()
@@ -555,14 +568,49 @@ class ModelState:
         # And set hyperparameters (additional keyword args passed through)
         hyperparams = HyperParams(charset.vocab_size, **kwargs)
 
-        # Create dataset, and save
-        dataset = DataSet(datastr, charset, seq_len=seq_len, srcinfo=(basename + "-data"))
+        # Find training/validation proportions
+        if trainfrac >= 1.0:
+            # Train and validate on full dataset
+            trainstr = datastr
+            validstr = datastr
+        else:
+            # Split data into training and validation strings
+            # First, find starting index of split, and search range +/- 0.005 * len
+            splitstart = int(float(len(datastr)) * trainfrac)
+            splitrange = int(float(len(datastr)) * 0.005)
+            splitrange = splitrange if splitrange > 0 else 1
+
+            # Then find the next newline char, and set to index after that
+            splitidx = datastr.find('\n', splitstart, splitstart + splitrange) + 1
+            if splitidx == 0:
+                # No newlines in range after splitstart, so look backwards
+                splitidx = datastr.rfind('\n', splitstart - splitrange, splitstart) + 1
+                if splitidx == 0:
+                    # *Still* not found (too few newlines?), so just use the split index
+                    splitidx = splitstart
+
+            # Now get split sections
+            trainstr = datastr[:splitidx]
+            validstr = datastr[splitidx:]
+
+        # Create datasets, and save
+        stderr.write("Initializing training data...\n")
+        dataset = DataSet(trainstr, charset, seq_len=seq_len, srcinfo=(basename + "-train-data"))
         datafilename = dataset.savetofile(dirname)
+        if validstr is trainstr:
+            # trainfrac was 1, reuse dataset as validset
+            stderr.write("No validation size specified, using training data.\n\n")
+            validset = dataset
+            validfilename = datafilename
+        else:
+            stderr.write("Initializing validation data...\n")
+            validset = DataSet(validstr, charset, seq_len=seq_len, srcinfo=(basename + "-valid-data"))
+            validfilename = validset.savetofile(dirname)
 
         # Now we can initialize the state
         modelname = "{0:s}-{1:d}x{2:d}-state".format(modeltype, hyperparams.layers, hyperparams.state_size)
         modelstate = cls(charset, dirname, modeltype, srcinfo=modelname, 
-            datafile=datafilename, data=dataset)
+            datafile=datafilename, data=dataset, validfile=validfilename, valid=validset)
 
         # And build the model, with optional checkpoint
         if init_checkpoint:
@@ -692,39 +740,67 @@ class ModelState:
             finally:
                 f.close()
 
-    def loaddata(self, filename=None, fromdir=''):
+    def loaddata(self, datafile=None, validfile=None, fromdir=''):
         """Attempts to load dataset first from given file, 
         then from current data file, then from current checkpoint (or file).
         """
 
-        if filename:
-            openfile = filename
+        if datafile:
+            opendata = datafile
         elif self.datafile:
-            openfile = self.datafile
+            opendata = self.datafile
         elif self.cp:
-            openfile = self.cp.datafile
+            opendata = self.cp.datafile
         elif self.cpfile:
             # Try loading from file
             self.cp = Checkpoint.loadcheckpoint(self.cpfile, self.curdir)
             if self.cp:
-                openfile = self.cp.datafile
+                opendata = self.cp.datafile
+                openvalid = self.cp.validfile
             else:
                 # Still didn't work, clear file listing (it's obviously bad)
                 self.cpfile = None
                 return False
         else:
             # No checkpoint and no file means no-go
-            stderr.write("No checkpoint file to load!\n")
+            stderr.write("No training data file specified and no checkpoint file to load!\n")
             return False
-        openpath = os.path.join(fromdir, openfile)
 
-        # Load data now that filename is established
-        self.data = DataSet.loadfromfile(openpath)
-        if self.data:
-            self.datafile = openfile
-            return True
-        else:
+        # Try loading data now that filename is established
+        datapath = os.path.join(fromdir, opendata)
+        self.data = DataSet.loadfromfile(datapath)
+        if not self.data:
             return False
+        self.datafile = opendata
+
+        # Now load validation dataset
+        if validfile:
+            openvalid = validfile
+        elif self.validfile:
+            openvalid = self.validfile
+        elif self.cp and self.cp.validfile:
+            openvalid = self.cp.validfile
+        else:
+            # If we haven't already loaded a checkpoint from file, we won't do it now
+            openvalid = None
+
+        if not openvalid or openvalid == opendata:
+            # No separate validation data, use training data
+            stderr.write("No separate validation data file specified, using training data instead.\n")
+            self.validfile = self.datafile
+            self.valid = self.data
+        else:
+            # Separate validation data, load from file
+            validpath = os.path.join(fromdir, openvalid)
+            self.valid = DataSet.loadfromfile(validpath)
+            if self.valid:
+                self.validfile = openvalid
+            else:
+                stderr.write("Warning: couldn't load validation data file! Using training data instead.\n")
+                self.validfile = self.datafile
+                self.valid = self.data
+
+        return True
 
     def loadmodel(self, filename=None, fromdir=''):
         """Attempts to load model parameters first from given file, 
@@ -799,7 +875,8 @@ class ModelState:
         # Load data and model, return True only if both work
         # Passing checkpoint's data/model filenames, overriding 
         # those already stored in model state
-        if self.loaddata(cp.datafile, self.curdir) and self.loadmodel(cp.modelfile, self.curdir):
+        if self.loaddata(cp.datafile, cp.validfile, self.curdir) \
+            and self.loadmodel(cp.modelfile, self.curdir):
             # Load checkpoint's last state, if present
             if isinstance(cp.laststate, np.ndarray):
                 self.laststate = cp.laststate
@@ -824,7 +901,8 @@ class ModelState:
         usedir = savedir if savedir else self.curdir
 
         # Try creating checkpoint
-        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.model, loss, self.laststate)
+        cp, cpfile = Checkpoint.createcheckpoint(usedir, self.datafile, self.validfile, 
+            self.model, loss, self.laststate)
         if cp:
             self.cp = cp
             self.cpfile = cpfile
@@ -838,21 +916,23 @@ class ModelState:
         else:
             return False
 
-    def builddataset(self, datastr, seq_len=100, srcinfo=None, savedir=None):
-        """Builds new dataset from string and saves to file in working directory."""
-
-        # Build dataset from string
-        self.data = DataSet(datastr, self.chars, seq_len, srcinfo)
-
-        # Save to specified dir if provided, otherwise curdir
-        usedir = savedir if savedir else self.curdir
-        self.datafile = self.data.savetofile(usedir)
-
-        # Return true if both operations succeed
-        if self.data and self.datafile:
-            return True
-        else:
-            return False
+    ### Disabled for now -- currently unused, need to revamp for training/validation split
+    #
+    #def builddataset(self, datastr, seq_len=100, srcinfo=None, savedir=None):
+    #    """Builds new dataset from string and saves to file in working directory."""
+    #
+    #    # Build dataset from string
+    #    self.data = DataSet(datastr, self.chars, seq_len, srcinfo)
+    #
+    #    # Save to specified dir if provided, otherwise curdir
+    #    usedir = savedir if savedir else self.curdir
+    #    self.datafile = self.data.savetofile(usedir)
+    #
+    #    # Return true if both operations succeed
+    #    if self.data and self.datafile:
+    #        return True
+    #    else:
+    #        return False
 
     def buildmodelparams(self, hyper, checkpointdir=None):
         """Builds model parameters from given hyperparameters and charset size.
@@ -869,9 +949,9 @@ class ModelState:
             stderr.write("Calculating initial loss estimate...\n")
             
             # We don't need anything fancy or long, just a rough baseline
-            data_len = self.data.batchepoch(16)
-            loss_len = 50 if data_len >= 50 else data_len
-            loss = self.model.calc_loss(self.data, 0, batchsize=8, num_examples=loss_len)
+            data_len = self.valid.batchepoch(16)
+            loss_len = 20 if data_len >= 20 else data_len
+            loss = self.model.calc_loss(self.valid, 0, batchsize=8, num_examples=loss_len)
 
             stderr.write("Initial loss: {0:.3f}\n".format(loss))
             stderr.write("Initial log loss: {0:.3f}\n".format(log(loss)))
@@ -950,13 +1030,13 @@ class ModelState:
                 init_state=train_state)
 
             # Calc loss
-            stdout.write("--------\n\nCalculating loss (epoch {0:d}, pos {1:d})...\n".format(
+            stdout.write("--------\n\nAt epoch {0:d}, position {1:d}\nCalculating validation loss...\n".format(
                 self.model.epoch, self.model.pos))
             stdout.flush()
 
-            # Calculate loss with blank state
-            #loss = self.model.calc_loss(x_slice, y_slice)
-            loss = self.model.calc_loss(self.data, self.model.pos, batchsize=batchsize, num_examples=valid_len)
+            # Calculate loss with blank state, starting from pos 0 of validation set if separate, current pos otherwise
+            validstart = self.model.pos if self.valid is self.data else 0
+            loss = self.model.calc_loss(self.valid, validstart, batchsize=batchsize, num_examples=valid_len)
 
             stdout.write("Previous loss: {0:.4f}, current loss: {1:.4f}\n".format(self.cp.loss, loss))
             stdout.write("Previous log loss: {0:.4f}, current log loss: {1:.4f}\n".format(log(self.cp.loss), log(loss)))
@@ -1029,7 +1109,7 @@ def printprogress(charset):
     def retfunc (model, init_state=None):
         print("--------\n")
         print("Time: {0}".format(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")))
-        print("Epoch: {0}, pos: {1}".format(model.epoch, model.pos))
+        print("Epoch {0}, position {1}".format(model.epoch, model.pos))
         print("Generated 100 chars:\n")
         genstr, _ = model.genchars(charset, 100, init_state=init_state, temperature=0.5)
         print(genstr + "\n")
@@ -1057,6 +1137,8 @@ def _fix_old_filenames(obj, fromdir):
         obj.cpfile = _fixedname(obj.cpfile, fromdir)
     if hasattr(obj, 'datafile'):
         obj.datafile = _fixedname(obj.datafile, fromdir)
+    if hasattr(obj, 'validfile'):
+        obj.validfile = _fixedname(obj.validfile, fromdir)
     if hasattr(obj, 'modelfile'):
         obj.modelfile = _fixedname(obj.modelfile, fromdir)
 
