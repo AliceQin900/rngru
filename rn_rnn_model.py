@@ -454,7 +454,8 @@ class ModelParams:
         stdout.write("Time for loss calculation step of {0:d} chars: {1:.4f} ms\n".format(
             xbatch.shape[0], (time2 - time1) * 1000.0))
 
-    def genchars(self, charset, numchars, init_state=None, seedch=None, use_max=False, temperature=0.5):
+    def genchars(self, charset, numchars, init_state=None, seedch=None, 
+        print_seed=True, use_max=False, temperature=0.5):
         """Generate string of characters from current model parameters.
 
         If use_max is True, will select most-likely character at each step.
@@ -479,14 +480,18 @@ class ModelParams:
 
         # Get generated sequence
         if use_max:
-            idxs, end_state = self.gen_chars_max(numchars - 1, seedvec, start_state)
+            idxs, end_state = self.gen_chars_max(numchars, seedvec, start_state)
         else:
-            idxs, end_state = self.gen_chars(numchars - 1, seedvec, start_state, temperature)
+            idxs, end_state = self.gen_chars(numchars, seedvec, start_state, temperature)
 
         # Convert to characters
         chars = [ charset.charatidx(np.argmax(i)) for i in idxs ]
 
         # Now construct string
-        return charset.charatidx(np.argmax(seedvec)) + "".join(chars), end_state
+        if print_seed:
+            retstr = charset.charatidx(np.argmax(seedvec))
+        else:
+            retstr = ''
+        return retstr + "".join(chars), end_state
 
 

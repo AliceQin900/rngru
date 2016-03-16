@@ -157,8 +157,12 @@ class CharSet:
         return idx
 
     def semirandomidx(self):
-        '''Returns random character from line-start list.'''
+        '''Returns random character index from line-start list.'''
         return self._line_start_idxs[random.randrange(len(self._line_start_idxs))]
+
+    def semirandomch(self):
+        '''Returns random character from line-start list.'''
+        return self._line_start_chars[random.randrange(len(self._line_start_chars))]
 
         
 class DataSet:
@@ -1072,10 +1076,32 @@ class ModelState:
         stdout.write("Completed {0:d} rounds of {1:d} examples each.\n".format(num_rounds, train_for))
         stdout.write("Total time: {0:.3f}s ({1:.3f}s per round).\n\n".format(timetaken, timetaken / float(num_rounds)))
 
+    # TODO: move priming string to model function like genchars
     def generatestring(self, numchars=100, temp=0.5, seed='\n', init_state=None, ret_state=False):
-        '''Generate string from current model state.'''
+        '''Generate string from current model state at given temperature.
+        An initial hidden state can be supplied with init_state.
+        The hidden state after generation is optionally returned if ret_state=True.
+
+        A seed string can be specified. If one character is provided, it will be used directly
+        by the generator (default is newline). If a longer string is given, the hidden state will
+        be primed with the first (len - 1) characters, and then the final character will be used 
+        as the generator seed (supplied init_state will be ignored). If an empty string is given,
+        a random character will be chosen from the set of characters beginning a line in the 
+        source data.
+        '''
+        if seed:
+            if len(seed) > 1:
+                state_seq = self.trackneurons(seed[:-1], temp=temp, transpose=False)
+                start_state = state_seq[-1]
+                seedch = seed[-1]
+            else:
+                start_state = init_state
+                seedch = seed
+        else:
+            start_state = init_state
+            seedch = self.chars.semirandomch()
         genstr, newstate = self.model.genchars(self.chars, numchars, 
-            init_state=init_state, seedch=seed, temperature=temp)
+            init_state=start_state, seedch=seedch, temperature=temp)
         print("--------\nGenerated {0} chars, temperature {1}\n--------\n\n{2}\n".format(
             numchars, temp, genstr))
         if ret_state:
@@ -1083,10 +1109,16 @@ class ModelState:
         else:
             return None
 
-    def trackneurons(self, usestr, temp=0.5, ret_output=False):
+    # TODO: move string processing to model function like genchars
+    def trackneurons(self, usestr, temp=0.5, ret_output=False, transpose=True):
         '''Track output of model for given string input. Useful for observing neuron
         activity as a sequence is processed.
-        Returns 3D array of states along sequence, in shape (layer, neuron, sequence).
+
+        Returns 3D tensor of states along sequence.
+        By default transposes the state tensor so the last axis is each neuron's 
+        output sequence, in shape (layer, neuron, sequence). This can be disabled 
+        with transpose=False.
+
         Optionally returns prediction outputs if ret_output=True.
         '''
         # Encode string as onehots
@@ -1096,11 +1128,12 @@ class ModelState:
         # Process sequence
         out_seq, state_seq = self.model.seq_process(onehots, start_state, temp)
         # Reshuffle state output
-        state_t = state_seq.transpose(1, 2, 0)
+        if transpose:
+            state_seq = state_seq.transpose(1, 2, 0)
         if ret_output:
-            return out_seq, state_t
+            return out_seq, state_seq
         else:
-            return state_t
+            return state_seq
 
 
 # Unattached functions
