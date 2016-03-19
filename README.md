@@ -1,5 +1,5 @@
 # RN-GRU
-This implements a multi-layer gated recurrent unit neural network project in Python/Theano, for training and sampling from character-level models. The code is inspired by Andrej Karpathy's (@karpathy) [char-rnn](https://github.com/karpathy/char-rnn) and Denny Britz' (@dennybritz) [WildML RNN tutorial](https://github.com/dennybritz/rnn-tutorial-gru-lstm). Training uses stochastic gradient descent, with gradient clipping (+/- 5.0) and rmsprop to stabilize updates per-parameter.
+This implements a multi-layer gated recurrent unit neural network project in Python/Theano, for training and sampling from character-level models. The code is inspired by Andrej Karpathy's (@karpathy) [char-rnn](https://github.com/karpathy/char-rnn) and Denny Britz' (@dennybritz) [WildML RNN tutorial](https://github.com/dennybritz/rnn-tutorial-gru-lstm). Training uses stochastic gradient descent (SGD), with gradient clipping (+/- 5.0) and RMSProp to stabilize updates per-parameter.
 
 The model will encode an input source text file as sequences of characters, and trains a GRU neural network to predict the next character in a sequence. The model can then be sampled at various temperatures to generate text. Training is batched by default, with user-specified batch size (default 16). Input text is split into fixed-size sequences (the last sequence will be padded with text from the beginning of the file if necessary) for ease of batching. Training round durations can be partial epochs, for testing initial hyperparameter choices. Short generated samples are printed during training.
 
@@ -12,7 +12,7 @@ Two variants are (currently) available, GRUResize and GRUEncode. GRUResize uses 
 Personally, I've had more luck with GRUEncode, so that's default.
 
 ## Requirements
-The code is written in Python (with Numpy), and uses [Theano](http://deeplearning.net/software/theano/) to provide auto-differentiation and GPU acceleration (GPU use requires additional configuration -- see the [Theano documentation](http://deeplearning.net/software/theano/tutorial/using_gpu.html) for details). Minimum Python version is 3.4 and minimum Theano version is 0.7, along with any additional dependencies from these.
+The code is written in Python (with Numpy), and uses [Theano](http://deeplearning.net/software/theano/) to provide auto-differentiation and GPU acceleration (GPU usage requires additional configuration -- see the [Theano documentation](http://deeplearning.net/software/theano/tutorial/using_gpu.html) for details). Minimum Python version is 3.4 and minimum Theano version is 0.7, along with any additional dependencies from these.
 
 ## Usage
 As Theano's compliation step can be time-consuming, this code is presently designed to be used in the interactive Python shell. To launch, go to the project directory and use:
@@ -21,7 +21,11 @@ python3 -i rn_rnn_char.py
 ```
 Once at the shell, use ```help(ModelState)``` and ```help(HyperParams)``` to familiarize yourself with the functions available.
 
-All the main functions regarding initialization, training, and generation are accessible through the ModelState class. To initialize a model from a text file, use a command similar to:
+All the main functions regarding initialization, training, and generation are accessible through the ModelState class.
+
+#### Examples
+
+To initialize a model from a text file:
 ```
 ms = ModelState.initfromsrcfile('/path/to/txt/file.txt', 'workingdir', modeltype='GRUEncode', trainfrac=0.9, layers=2, state_size=256, learnrate=0.001, decay=0.95, regcost=0.1)
 ```
@@ -49,6 +53,20 @@ This will load the model's parameter matrices and recompile text generation func
 ```
 ms.restore('checkpoint-filename')
 ```
+
+## Hyperparameters
+
+The following hyperparameters are available when initializing a model:
+
+Name | Description | Default
+---- | ----------- | -------
+*layers* | Number of hidden layers | 2
+*state_size* | Hidden state vector size | 128
+*learnrate* | SGD learning rate | 1e-3
+*decay* | RMSProp decay constant | 0.95
+*regcost* | L2 regularization constant | 0.1
+
+These arguments will be passed to the constructor of HyperParams when calling ```initfromsrcfile()```
 
 ## License
 Apache 2.0 (see LICENSE.txt for details)
